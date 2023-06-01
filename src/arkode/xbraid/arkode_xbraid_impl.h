@@ -74,12 +74,48 @@ struct _ARKBraidContent
   braid_Int last_flag_braid;
   int       last_flag_arkode;
 
+  /* flags for theta method */
+  int flag_refine_downcycle;
+  int flag_skip_downcycle;
+
+  /* Fine and coarse grid method orders */
+  int order_fine;
+  int order_coarse;
+  int num_order_conditions;
+
+  /* Butcher tables */
+  int num_levels;  /* number of levels in MGRIT hierarchy */
+  int *num_tables; /* number of Butcher tables for each level */
+  ARKodeButcherTable **coarse_btables; /* array of Butcher tables for each level */
+  ARKodeButcherTable fine_btable;
+
   /* Output time and state */
   realtype tout;
   N_Vector yout;
 };
 
 typedef struct _ARKBraidContent *ARKBraidContent;
+
+
+/* ---------------------
+ * ARKBraid vector data
+ * --------------------- */
+
+
+/* Define ARKBraidVecData content */
+struct _ARKBraidVecData
+{
+  /* Store time value at previous C-point */
+  realtype tprior;
+
+  /* Store time-step normalization factor */
+  realtype etascale;
+
+  /* Store order condition rhs */
+  realtype *Phi;
+};
+
+typedef struct _ARKBraidVecData *ARKBraidVecData;
 
 
 #ifdef __cplusplus

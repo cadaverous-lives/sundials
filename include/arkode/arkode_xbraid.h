@@ -45,6 +45,7 @@ SUNDIALS_EXPORT int ARKBraid_Free(braid_App *app);
  * ARKBraid Set Functions
  * ---------------------- */
 
+SUNDIALS_EXPORT int ARKBraid_SetCoarseOrder(braid_App app, int order);
 
 SUNDIALS_EXPORT int ARKBraid_SetStepFn(braid_App app, braid_PtFcnStep step);
 
@@ -90,6 +91,16 @@ SUNDIALS_EXPORT int ARKBraid_Init(braid_App app, realtype t,
 
 SUNDIALS_EXPORT int ARKBraid_Access(braid_App app, braid_Vector u,
                                     braid_AccessStatus astatus);
+
+SUNDIALS_EXPORT int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus);
+
+// 2. Add ARKODE implementations of these functions (declare in include/arkode/arkode_xbraid.h and define in src/arkode/arkode_xbraid.c):
+/* return the buffer space needed, this will get added to the buffer space needed for the vector data in SUNBraidVector_BufSize */
+SUNDIALS_EXPORT int ARKBraid_GetBufSize(braid_App app, braid_Int *size_ptr);
+ 
+/* pack/unpack data in/out of the buffer, SUNBraidVector_BufPack will offset the input pointer past the vector data */
+SUNDIALS_EXPORT int ARKBraid_BufPack(braid_App, void *buffer, void *data_ptr);
+SUNDIALS_EXPORT int ARKBraid_BufUnPack(braid_App, void *buffer, void *data_ptr);
 
 
 /* -----------------

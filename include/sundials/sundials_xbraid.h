@@ -34,10 +34,11 @@ extern "C" {
 
 struct _braid_Vector_struct
 {
-  N_Vector y;
+  N_Vector  y; /* the solution vector */
+  void *vdata; /* auxilliary time-dependent data, handled by SUNBraidOps */
 };
 
-/* Poiner to vector wrapper (same as braid_Vector) */
+/* Pointer to vector wrapper (same as braid_Vector) */
 typedef struct _braid_Vector_struct *SUNBraidVector;
 
 
@@ -50,6 +51,10 @@ typedef struct _braid_Vector_struct *SUNBraidVector;
 struct _SUNBraidOps
 {
   int (*getvectmpl)(braid_App app, N_Vector *tmpl);
+  // 1. Add new “methods” to the SUNBraidOps structure (vtable)
+  int (*getbufsize)(braid_App app, braid_Int *size_ptr);
+  int (*bufpack)(braid_App app, void* buffer, void *vdata_ptr);
+  int (*bufunpack)(braid_App app, void* buffer, void *vdata_ptr);
 };
 
 /* Pointer to operations structure */
@@ -78,6 +83,12 @@ SUNDIALS_EXPORT int SUNBraidApp_FreeEmpty(braid_App *app);
 
 SUNDIALS_EXPORT int SUNBraidApp_GetVecTmpl(braid_App app, N_Vector *tmpl);
 
+// 2. Add generic version of these functions (declare in include/sundials/sundials_xbraid.h and define in src/sundials/sundials_xbraid.c) e.g.,
+SUNDIALS_EXPORT int SUNBraidApp_GetBufSize(braid_App app, braid_Int *size_ptr);
+
+SUNDIALS_EXPORT int SUNBraidApp_BufPack(braid_App app, void* buffer, void* data_ptr);
+
+SUNDIALS_EXPORT int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** data_ptr);
 
 /* -------------------------
  * SUNBraid vector functions

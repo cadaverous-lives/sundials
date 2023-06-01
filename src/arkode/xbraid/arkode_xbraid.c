@@ -34,6 +34,7 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
 {
   int             flag;
   ARKBraidContent content;
+  ARKodeButcherTable Bi, Be;
 
   /* Check input */
   if (arkode_mem == NULL) return SUNBRAID_ILLINPUT;
@@ -44,6 +45,9 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
 
   /* Set operations */
   (*app)->ops->getvectmpl = ARKBraid_GetVecTmpl;
+  (*app)->ops->getbufsize  = ARKBraid_GetBufSize;
+  (*app)->ops->bufpack  = ARKBraid_BufPack;
+  (*app)->ops->bufunpack  = ARKBraid_BufUnpack;
 
   /* Create ARKODE interface content */
   content = NULL;
@@ -69,9 +73,31 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   content->last_flag_braid  = SUNBRAID_SUCCESS;
   content->last_flag_arkode = SUNBRAID_SUCCESS;
 
-  /* Output time and solution (allocaed in access if necessary) */
+  /* Output time and solution (allocated in access if necessary) */
   content->tout = content->ark_mem->tn;
   content->yout = NULL;
+
+  /* flags for theta method */
+  content->flag_refine_downcycle = SUNFALSE;
+  content->flag_skip_downcycle   = SUNTRUE;
+
+  /* Fine and coarse grid method orders */
+  ARKStepGetCurrentButcherTables(content->ark_mem, &Bi, &Be);
+  if (Bi == NULL && Be == NULL) return SUNBRAID_ILLINPUT;
+  if (Bi != NULL)
+    content->order_fine = Bi->q;
+  else
+    content->order_fine = Be->q;
+  // TODO: should this default to order_fine + 1?
+  content->order_coarse = content->order_fine;
+  content->num_order_conditions = _ARKBraid_GetNumOrderConditions(
+    content->order_fine, content->order_coarse
+  );
+
+  content->num_levels     = 0;
+  content->num_tables     = NULL;
+  content->coarse_btables = NULL;
+  content->fine_btable    = NULL;
 
   /* Attach content */
   (*app)->content = content;
@@ -79,6 +105,27 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   return SUNBRAID_SUCCESS;
 }
 
+int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
+{
+  ARKBraidVecData vdata;
+
+  /* Check input */
+  if (content == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Create vector data */
+  vdata->tprior   = RCONST(0.);
+  vdata->etascale = RCONST(1.);
+  vdata->Phi      = NULL;
+
+  /* Allocate for order conditions (Phi) */
+  int num_conditions = _ARKBraid_GetNumOrderConditions(content->order_fine, content->order_coarse);
+  if (num_conditions > 0)
+  {
+    vdata->Phi = (realtype *) malloc(num_conditions * sizeof(realtype));
+    if (vdata->Phi == NULL) return SUNBRAID_MEMFAIL;
+  }
+  return SUNBRAID_SUCCESS;
+}
 
 /* Initialize XBraid, attach interface functions */
 int ARKBraid_BraidInit(MPI_Comm comm_w, MPI_Comm comm_t, realtype tstart,
@@ -113,9 +160,36 @@ int ARKBraid_BraidInit(MPI_Comm comm_w, MPI_Comm comm_t, realtype tstart,
                           core);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
+  /* Set sync function */
+  braid_flag = braid_SetSync(core, ARKBraid_Sync);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+
   return SUNBRAID_SUCCESS;
 }
 
+
+static int _ARKBraid_FreeCGBtables(ARKBraidContent content)
+{
+  if (content->coarse_btables != NULL)
+  {
+    for (int level = 0; level < content->num_levels; level++)
+    {
+      for (int table = 0; table < content->num_tables[level]; table++)
+      {
+        if (content->coarse_btables[level][table] != NULL)
+          ARKodeButcherTable_Free(content->coarse_btables[level][table]);
+      }
+      free(content->coarse_btables[level]);
+      content->coarse_btables[level] = NULL;
+    }
+    free(content->num_tables);
+    free(content->coarse_btables);
+    content->num_tables     = NULL;
+    content->coarse_btables = NULL;
+  }
+
+  return SUNBRAID_SUCCESS;
+}
 
 /* Deallocate XBraid app structure */
 int ARKBraid_Free(braid_App *app)
@@ -133,6 +207,14 @@ int ARKBraid_Free(braid_App *app)
       arkFreeVec(content->ark_mem, &(content->yout));
       content->yout = NULL;
     }
+
+    if (content->fine_btable != NULL)
+    {
+      ARKodeButcherTable_Free(content->fine_btable);
+      content->fine_btable = NULL;
+    }
+    _ARKBraid_FreeCGBtables(content);
+
     free((*app)->content);
     (*app)->content = NULL;
   }
@@ -144,6 +226,31 @@ int ARKBraid_Free(braid_App *app)
  * ARKBraid Set Functions
  * ---------------------- */
 
+int ARKBraid_SetCoarseOrder(braid_App app, int order)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent) app->content;
+
+  /* Check order */
+  if (order < 0 || order > 3) return SUNBRAID_ILLINPUT;
+
+  /* Restore default or set default */
+  if (order == 0)
+    content->order_coarse = content->order_fine;
+  else
+    content->order_coarse = order;
+
+  /* Get new number of order conditions */
+  content->num_order_conditions = _ARKBraid_GetNumOrderConditions(
+    content->order_fine, content->order_coarse
+  );
+
+  return SUNBRAID_SUCCESS;
+}
 
 int ARKBraid_SetStepFn(braid_App app, braid_PtFcnStep step)
 {
@@ -296,6 +403,34 @@ int ARKBraid_GetSolution(braid_App app, realtype *tout, N_Vector yout)
   return SUNBRAID_SUCCESS;
 }
 
+/* returns the Butcher table to be used for index ti on the given level */
+static int _ARKBraid_GetBTable(ARKBraidContent content, braid_StepStatus status, braid_Int level, braid_Int ti, ARKodeButcherTable* B)
+{
+  int flag;    /* return flag */
+  int iu, il;  /* upper and lower indices for the current level */
+  int tir;     /* time index, relative to first time point owned by current proc */
+  
+  /* Get the coarse (relative) time index */
+  flag = braid_StepStatusGetTIUL(status, &iu, &il, level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  tir = ti - il;
+
+  if (level == 0 || content->order_coarse <= content->order_fine 
+                 || content->coarse_btables == NULL 
+                 || content->coarse_btables[level] == NULL 
+                 || content->coarse_btables[level][tir] == NULL) 
+  {
+    /* Use the fine table */
+    *B = content->fine_btable;
+  } 
+  else 
+  {
+    /* Use the coarse table */
+    *B = content->coarse_btables[level][tir];
+  }
+  return SUNBRAID_SUCCESS;
+}
+
 
 /* --------------------------
  * XBraid Interface Functions
@@ -306,15 +441,24 @@ int ARKBraid_GetSolution(braid_App app, realtype *tout, N_Vector yout)
 int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
                   braid_Vector u, braid_StepStatus status)
 {
-  braid_Int       braid_flag; /* braid function return flag  */
-  int             ark_flag;   /* arkode step return flag     */
-  int             flag;       /* arkode function return flag */
-  int             level;      /* current level               */
-  int             rfac;       /* refinement factor           */
-  realtype        tstart;     /* current time                */
-  realtype        tstop;      /* evolve to this time         */
-  realtype        hacc;       /* accuracy based step size    */
-  ARKBraidContent content;    /* ARKBraid app content        */
+  braid_Int       braid_flag;  /* braid function return flag       */
+  int             ark_flag;    /* arkode step return flag          */
+  int             flag;        /* arkode function return flag      */
+  int             level;       /* current level                    */
+  int             rfac;        /* refinement factor                */
+  int             cfactor;     /* coarsening factor                */
+  int             ti;          /* time index                       */
+  int             caller;      /* caller of ARKBraid_Step          */
+  realtype        tstart;      /* current time                     */
+  realtype        tstop;       /* evolve to this time              */
+  realtype        eta, eta_pr; /* normalized time step sizes       */
+  realtype        eta_c;       /* predicted normalized coarse step */
+  realtype        hacc;        /* accuracy based step size         */
+  ARKBraidContent content;     /* ARKBraid app content             */
+  ARKodeMem       ark_mem;     /* ARKode memory                    */
+
+  ARKodeButcherTable  B = NULL;  /* Butcher table for the step  */
+  ARKBraidVecData vdata = NULL;  /* vector data for storing order conditions */
 
   /* Check input */
   if (app == NULL || status == NULL) return SUNBRAID_ILLINPUT;
@@ -322,23 +466,120 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Access app content */
   content = (ARKBraidContent) app->content;
+  ARKBraid_GetARKStepMem(app, &ark_mem);
 
   if (content->ark_mem == NULL) return SUNBRAID_MEMFAIL;
 
-  /* Get step start and stop times */
+  /* Get info from XBraid */
   braid_flag = braid_StepStatusGetTstartTstop(status, &tstart, &tstop);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
-  /* Propagate the solution */
+  braid_flag = braid_StepStatusGetLevel(status, &level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+
+  braid_flag = braid_StepStatusGetCallingFunction(status, &caller);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+
+
+  braid_flag = braid_StepStatusGetTIndex(status, &ti);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+
+  /* Get Butcher table for this step */
+  _ARKBraid_GetBTable(content, status, level, ti, &B);
+  if (B == NULL) return SUNBRAID_MEMFAIL;
+
+  /* Set the Butcher table TODO: support for explicit methods */
+  // if (app->explicit && level == 0)
+  //   flag = ARKStepSetTables(ark_mem, B->q, B->p, NULL, B);
+  // else
+  flag = ARKStepSetTables(ark_mem, B->q, B->p, B, NULL);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+  
+  /* Compute order conditions */
+
+  /* F-relax */
+  booleantype frelax = (caller == braid_ASCaller_FRestrict 
+                     || caller == braid_ASCaller_FASResidual);
+  if (content->flag_refine_downcycle && frelax && u->vdata != NULL)
+  {
+    braid_flag = braid_StepStatusGetCFactor(status, &cfactor, level);
+    CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+    
+    /* Access vector data */
+    vdata = (ARKBraidVecData) u->vdata;
+
+    /* First step of f-interval */
+    if (_ARKBraid_IsCPoint(ti, cfactor))
+    {
+      /* Reset order conditions */
+      for (int i=0; i < content->num_order_conditions; i++)
+        vdata->Phi[i] = RCONST(0.0);
+
+      vdata->tprior   = tstart;
+      vdata->etascale = cfactor * (tstop - tstart);
+    }
+
+    /* etascale is a prediction of the total length of the coarse interval 
+     * we normalize by this for numerical stability (scalars are O(1/m) rather than O(h)) 
+     */
+    eta = (tstop - tstart) / vdata->etascale;
+    eta_pr = (tstart - vdata->tprior) / vdata->etascale;
+    realtype *phi_step, *phi_pr;
+
+    /* Allocate temporary arrays TODO: preallocate in app->content? */
+    phi_step = (realtype*) malloc(content->num_order_conditions * sizeof(realtype));
+    if (phi_step == NULL) return SUNBRAID_MEMFAIL;
+    phi_pr = (realtype*) malloc(content->num_order_conditions * sizeof(realtype));
+    if (phi_pr == NULL) return SUNBRAID_MEMFAIL;
+
+    /* Compute order conditions */
+
+    /* Store prior order conditions */
+    for (int i=0; i < content->num_order_conditions; i++)
+      phi_pr[i] = vdata->Phi[i];
+
+    /* Second order */
+    _phi_order2(B->b, B->c, B->stages, &phi_step[0]);
+    vdata->Phi[0] += eta * eta * phi_step[0] + eta * eta_pr;
+
+    /* Third order */
+    if (content->order_coarse >= 3)
+    {
+      _phi_order3a(B->b, B->c, B->c, B->stages, &phi_step[1]);
+      _phi_order3b(B->b, B->A, B->c, B->stages, &phi_step[2]);
+      vdata->Phi[1] += SUNRpowerI(eta, 3) * phi_step[1] 
+                     + RCONST(2.) * eta * eta * eta_pr * phi_step[0] + eta * eta_pr * eta_pr;
+      vdata->Phi[2] += SUNRpowerI(eta, 3) * phi_step[2] 
+                     + eta * phi_pr[0] + eta * eta * eta_pr * phi_step[0];
+    }
+
+    /* Last step of f-interval */
+    if (_ARKBraid_IsCPoint(ti+1, cfactor))
+    {
+      /* Normalize order conditions */
+      eta_c = (tstop - vdata->tprior) / vdata->etascale;
+
+      /* Second order */
+      vdata->Phi[0] /= eta_c * eta_c;
+
+      /* Third order */
+      if (content->order_coarse >= 3)
+      {
+        vdata->Phi[1] /= eta_c * eta_c * eta_c;
+        vdata->Phi[2] /= eta_c * eta_c * eta_c;
+      }
+    }
+
+    free(phi_step);
+    free(phi_pr);
+  }
+
+  /* Finally propagate the solution */
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
                            &ark_flag);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Refine grid (XBraid will ignore if refinement is disabled) */
-
-  /* Get current level (XBraid only accepts refinements on level 0) */
-  braid_flag = braid_StepStatusGetLevel(status, &level);
-  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
   /* Compute refinement factor */
   if (level == 0)
@@ -373,9 +614,11 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 /* Create and initialize vectors */
 int ARKBraid_Init(braid_App app, realtype t, braid_Vector *u_ptr)
 {
-  int             flag;     /* return flag          */
-  N_Vector        y;        /* output N_Vector      */
-  ARKBraidContent content;  /* ARKBraid app content */
+  int             flag;        /* return flag          */
+  N_Vector        y;           /* output N_Vector      */
+  sunrealtype    *order_conds; /* order conditions   */
+  ARKBraidContent content;     /* ARKBraid app content */
+  ARKBraidVecData vdata;       /* ARKBraid vector data (used for Theta method) */
 
   /* Check input */
   if (app == NULL) return SUNBRAID_ILLINPUT;
@@ -390,6 +633,11 @@ int ARKBraid_Init(braid_App app, realtype t, braid_Vector *u_ptr)
   y = NULL;
   if (!arkAllocVec(content->ark_mem, content->ark_mem->yn, &y))
     return SUNBRAID_ALLOCFAIL;
+
+  /* Create new vector data */
+  vdata = NULL;
+  flag = ARKBraidVecData_Create(content, &vdata);
+  if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Create new XBraid vector */
   flag = SUNBraidVector_New(y, u_ptr);
@@ -411,7 +659,7 @@ int ARKBraid_Access(braid_App app, braid_Vector u,
   braid_Int       ntpoints;    /* num pts on fine grid */
   braid_Int       idx;         /* time index for u     */
   braid_Real      time;        /* time value for u     */
-  ARKBraidContent content;     /* ARKBraid app content  */
+  ARKBraidContent content;     /* ARKBraid app content */
 
   /* Check input */
   if (app == NULL || u == NULL || astatus == NULL) return SUNBRAID_ILLINPUT;
@@ -456,6 +704,137 @@ int ARKBraid_Access(braid_App app, braid_Vector u,
       N_VScale(ONE, u->y, content->yout);
     }
   }
+
+  return SUNBRAID_SUCCESS;
+}
+
+/* Sync is used by theta method to allocate memory for coarse grid butcher tables */
+int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
+{
+  int             flag;            /* return flag          */
+  ARKBraidContent content;         /* ARKBraid app content */
+  int             caller;          /* XBraid calling function */
+  int             level, nlevels;  /* XBraid level, number of levels */
+  int             iter;            /* XBraid iteration */
+  int             iu, il;          /* XBraid index of lowest and highest time indices owned by this processor */
+  int             ncpoints;        /* XBraid number of coarse grid points */
+
+  /* Check input */
+  if (app == NULL || sstatus == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Access app content */
+  content = (ARKBraidContent) app->content;
+
+  /* Check that theta method needs computing */
+  if (content->order_fine >= content->order_coarse) return SUNBRAID_SUCCESS;
+
+  /* Get information from XBraid status */
+  flag = braid_SyncStatusGetCallingFunction(sstatus, &caller);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetLevel(sstatus, &level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetNLevels(sstatus, &nlevels);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetIter(sstatus, &iter);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+
+  /* Check if this is a new hierarchy */
+  if (caller == braid_ASCaller_Drive_AfterInit || caller == braid_ASCaller_FRefine_AfterInitHier)
+  {
+    _ARKBraid_FreeCGBtables(content);
+
+    /* Allocate memory for coarse grid butcher tables */
+    content->coarse_btables = (ARKodeButcherTable **) malloc((nlevels-1) * sizeof(ARKodeButcherTable*));
+    if (content->coarse_btables == NULL) return SUNBRAID_ALLOCFAIL;
+
+    for (int level = 1; level < nlevels; level++)
+    {
+      flag = braid_SyncStatusGetTIUL(sstatus, &iu, &il, level);
+      CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+
+      ncpoints = iu - il + 1;
+      content->coarse_btables[level-1] = (ARKodeButcherTable *) malloc(ncpoints * sizeof(ARKodeButcherTable));
+    }
+
+    /* Turn on computation of coarse grid Butcher tables */
+    content->flag_refine_downcycle = SUNTRUE;
+    printf("ARKBraid: Computing coarse grid Butcher tables\n");
+  }
+
+  /* make sure this is still computed even when we skip the first downcycle */
+  if (content->flag_skip_downcycle && caller == braid_ASCaller_Drive_TopCycle && iter == 0)
+  {
+    content->flag_refine_downcycle = SUNTRUE;
+    printf("ARKBraid: Skipping first downcycle, but still computing coarse grid Butcher tables\n");
+  }
+
+  return SUNBRAID_SUCCESS;
+}
+
+/* return the buffer space needed, this will get added to the buffer space needed for the vector data in SUNBraidVector_BufSize */
+int ARKBraid_GetBufSize(braid_App app, braid_Int *size_ptr)
+{
+  ARKBraidContent content; /* ARKBraid app content */
+
+  /* Check input */
+  if (app == NULL || size_ptr == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  /* Access app content */
+  content = (ARKBraidContent) app->content;
+
+  /* Set buffer size */
+  *size_ptr = (content->num_order_conditions + 2) * sizeof(realtype);
+
+  return SUNBRAID_SUCCESS;
+}
+ 
+/* pack/unpack data in/out of the buffer, SUNBraidVector_BufPack will offset the input pointer past the vector data */
+int ARKBraid_BufPack(braid_App app, void *buffer, void *vdata_ptr)
+{
+  /* Check input */
+  if (app == NULL || buffer == NULL || vdata_ptr == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Access vector data */
+  ARKBraidVecData vdata = (ARKBraidVecData) vdata_ptr;
+
+  /* Access app content */
+  ARKBraidContent content = (ARKBraidContent) app->content;
+
+  /* Copy data into buffer */
+  realtype *buf = (realtype *) buffer;
+  buf[0] = vdata->tprior;
+  buf[1] = vdata->etascale;
+  for (int i = 0; i < content->num_order_conditions; i++)
+    buf[i+2] = vdata->Phi[i];
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ptr)
+{
+  int             flag;  /* return flag                  */
+  ARKBraidVecData vdata; /* ARKBraid vector data, output */
+
+  /* Check input */
+  if (app == NULL || buffer == NULL || vdata_ptr == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Access app content */
+  ARKBraidContent content = (ARKBraidContent) app->content;
+  
+  /* Allocate vdata */
+  flag = ARKBraidVecData_Create(content, &vdata);
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Copy data from buffer */
+  realtype *buf = (realtype *) buffer;
+  vdata->tprior = buf[0];
+  vdata->etascale = buf[1];
+  for (int i = 2; i < content->num_order_conditions; i++)
+    vdata->Phi[i] = buf[i];
+
+  /* Return vector data */
+  *vdata_ptr = vdata;
 
   return SUNBRAID_SUCCESS;
 }
@@ -517,4 +896,26 @@ int ARKBraid_TakeStep(void *arkode_mem, realtype tstart, realtype tstop,
   /* Step was successful and passed the error test */
   *ark_flag = STEP_SUCCESS;
   return ARK_SUCCESS;
+}
+
+booleantype _ARKBraid_IsCPoint(int tindex, int cfactor)
+{
+  if (tindex % cfactor == 0) return SUNTRUE;
+  return SUNFALSE;
+}
+
+int _ARKBraid_GetNumOrderConditions(int fine_order, int coarse_order)
+{
+  int num_order_conditions = 0;
+
+  /* Check if theta method needs computing */
+  if (coarse_order <= coarse_order) return num_order_conditions;
+
+  /* Compute number of order conditions */
+  if (coarse_order >= 2) num_order_conditions += 1;
+  if (coarse_order >= 3) num_order_conditions += 2;
+  if (coarse_order >= 4) num_order_conditions += 4;
+  if (coarse_order >= 5) num_order_conditions += 9;
+
+  return num_order_conditions;
 }

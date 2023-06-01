@@ -1557,32 +1557,50 @@ static booleantype __order1(realtype *b, int s)
 }
 
 /* b'*c = 1/2 */
+int _phi_order2(realtype *b, realtype *c, int s, realtype *out)
+{
+  if (__dot(b,c,s,out))  return 1;
+  return 0;
+}
+
 static booleantype __order2(realtype *b, realtype *c, int s)
 {
   realtype bc;
-  if (__dot(b,c,s,&bc))  return(SUNFALSE);
+  if (_phi_order2(b,c,s,&bc))  return(SUNFALSE);
   return (SUNRabs(bc - RCONST(0.5)) > TOL) ? SUNFALSE : SUNTRUE;
 }
 
 /* b'*(c1.*c2) = 1/3 */
+int _phi_order3a(realtype *b, realtype *c1, realtype *c2, int s, realtype *out)
+{
+  realtype *tmp = calloc( s, sizeof(realtype) );
+  if (__vv(c1,c2,s,tmp)) { free(tmp); return 1; }
+  if (__dot(b,tmp,s,out))  return 1;
+  free(tmp);
+  return 0;
+}
+
 static booleantype __order3a(realtype *b, realtype *c1, realtype *c2, int s)
 {
   realtype bcc;
-  realtype *tmp = calloc( s, sizeof(realtype) );
-  if (__vv(c1,c2,s,tmp)) { free(tmp); return(SUNFALSE); }
-  if (__dot(b,tmp,s,&bcc))  return(SUNFALSE);
-  free(tmp);
+  if (_phi_order3a(b,c1,c2,s,&bcc))  return(SUNFALSE);
   return (SUNRabs(bcc - RCONST(1.0)/RCONST(3.0)) > TOL) ? SUNFALSE : SUNTRUE;
 }
 
 /* b'*(A*c) = 1/6 */
+int _phi_order3b(realtype *b, realtype **A, realtype *c, int s, realtype *out)
+{
+  realtype *tmp = calloc( s, sizeof(realtype) );
+  if (__mv(A,c,s,tmp)) { free(tmp); return 1; }
+  if (__dot(b,tmp,s,out))  return 1;
+  free(tmp);
+  return 0;
+}
+
 static booleantype __order3b(realtype *b, realtype **A, realtype *c, int s)
 {
   realtype bAc;
-  realtype *tmp = calloc( s, sizeof(realtype) );
-  if (__mv(A,c,s,tmp)) { free(tmp); return(SUNFALSE); }
-  if (__dot(b,tmp,s,&bAc))  return(SUNFALSE);
-  free(tmp);
+  if (_phi_order3b(b,A,c,s,&bAc))  return(SUNFALSE);
   return (SUNRabs(bAc - RCONST(1.0)/RCONST(6.0)) > TOL) ? SUNFALSE : SUNTRUE;
 }
 

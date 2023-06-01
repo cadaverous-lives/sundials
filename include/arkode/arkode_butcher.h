@@ -67,6 +67,10 @@ SUNDIALS_EXPORT int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1,
                                                      int *q, int *p,
                                                      FILE *outfile);
 
+/* utility functions for computing order conditions */
+int _phi_order2(realtype *b, realtype *c, int s, realtype *out);
+int _phi_order3a(realtype *b, realtype *c1, realtype *c2, int s, realtype *out);
+int _phi_order3b(realtype *b, realtype **A, realtype *c, int s, realtype *out);
 
 #ifdef __cplusplus
 }

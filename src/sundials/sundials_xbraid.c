@@ -16,6 +16,7 @@
 
 #include "sundials/sundials_xbraid.h"
 #include "sundials/sundials_math.h"
+#include "sunnonlinsol/sunnonlinsol_newton.h"
 
 #define ONE RCONST(1.0)
 
@@ -83,6 +84,26 @@ int SUNBraidApp_GetVecTmpl(braid_App app, N_Vector *y)
   return app->ops->getvectmpl(app, y);
 }
 
+/* Get the size of the buffer to be allocated */
+int SUNBraidApp_GetBufSize(braid_App app, braid_Int* size_ptr)
+{
+  if (app->ops->getbufsize == NULL) return SUNBRAID_OPNULL;
+  return app->ops->getbufsize(app, size_ptr);
+}
+
+/* Pack the buffer */
+int SUNBraidApp_BufPack(braid_App app, void* buffer, void* vdata_ptr)
+{
+  if (app->ops->bufpack == NULL) return SUNBRAID_OPNULL;
+  return app->ops->bufpack(app, buffer, vdata_ptr);
+}
+
+/* Unpack the buffer */
+int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
+{
+  if (app->ops->bufunpack == NULL) return SUNBRAID_OPNULL;
+  return app->ops->bufunpack(app, buffer, vdata_ptr);
+}
 
 /* -------------------------
  * SUNBraid Vector Functions
@@ -211,6 +232,13 @@ int SUNBraidVector_BufSize(braid_App app, braid_Int *size_ptr,
   flag = N_VBufSize(ytmpl, size_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
+  /* Get integrator buffer size */
+  braid_Int tmp;
+  SUNBraidApp_GetBufSize(app, &tmp);
+
+  /* Update buffer size */
+  *size_ptr += tmp;
+
   return SUNBRAID_SUCCESS;
 }
 
@@ -228,6 +256,14 @@ int SUNBraidVector_BufPack(braid_App app, braid_Vector u, void *buffer,
   /* Fill buffer */
   flag = N_VBufPack(u->y, buffer);
   if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Get buffer offset */
+  braid_Int offset;
+  N_VBufSize(u->y, &offset);
+
+  /* Pack integrator buffer starting at offset */
+  void* tmp_buffer = (char*) buffer + offset;
+  SUNBraidApp_BufPack(app, tmp_buffer, u->vdata);
 
   return SUNBRAID_SUCCESS;
 }
@@ -259,6 +295,14 @@ int SUNBraidVector_BufUnpack(braid_App app, void *buffer, braid_Vector *u_ptr,
   /* Unpack buffer */
   flag = N_VBufUnpack(y, buffer);
   if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Get buffer offset */
+  braid_Int offset;
+  N_VBufSize(y, &offset);
+
+  /* Unpack integrator buffer starting at offset */
+  void* tmp_buffer = (char*) buffer + offset;
+  SUNBraidApp_BufUnpack(app, tmp_buffer, (*u_ptr)->vdata);
 
   return SUNBRAID_SUCCESS;
 }
