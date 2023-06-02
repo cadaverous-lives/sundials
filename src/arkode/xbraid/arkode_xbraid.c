@@ -16,12 +16,46 @@
 
 #include "arkode/arkode_xbraid.h"
 #include "sundials/sundials_math.h"
+#include "nvector/nvector_serial.h"
+#include "sunmatrix/sunmatrix_dense.h"
+#include "sunlinsol/sunlinsol_dense.h"
+#include "sunnonlinsol/sunnonlinsol_newton.h"
+#include "arkode_xbraid_theta_methods.c"
+
 #include "arkode/arkode.h"
 
 #include "arkode_xbraid_impl.h"
 #include "arkode_arkstep_impl.h"
 
 #define ONE RCONST(1.0)
+
+
+/* ------------------------
+ * Private helper functions
+ * ------------------------ */
+
+
+static booleantype _ARKBraid_IsCPoint(int tindex, int cfactor)
+{
+  if (tindex % cfactor == 0) return SUNTRUE;
+  return SUNFALSE;
+}
+
+static int _ARKBraid_GetNumOrderConditions(int fine_order, int coarse_order)
+{
+  int num_order_conditions = 0;
+
+  /* Check if theta method needs computing */
+  if (coarse_order <= fine_order) return num_order_conditions;
+
+  /* Compute number of order conditions */
+  if (coarse_order >= 2) num_order_conditions += 1;
+  if (coarse_order >= 3) num_order_conditions += 2;
+  if (coarse_order >= 4) num_order_conditions += 4;
+  if (coarse_order >= 5) num_order_conditions += 9;
+
+  return num_order_conditions;
+}
 
 
 /* -------------------------------
@@ -44,10 +78,11 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Set operations */
-  (*app)->ops->getvectmpl = ARKBraid_GetVecTmpl;
+  (*app)->ops->getvectmpl  = ARKBraid_GetVecTmpl;
   (*app)->ops->getbufsize  = ARKBraid_GetBufSize;
-  (*app)->ops->bufpack  = ARKBraid_BufPack;
-  (*app)->ops->bufunpack  = ARKBraid_BufUnpack;
+  (*app)->ops->bufpack     = ARKBraid_BufPack;
+  (*app)->ops->bufunpack   = ARKBraid_BufUnpack;
+  (*app)->ops->freevecdata = ARKBraid_FreeVecData;
 
   /* Create ARKODE interface content */
   content = NULL;
@@ -112,6 +147,10 @@ int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
   /* Check input */
   if (content == NULL) return SUNBRAID_ILLINPUT;
 
+  vdata = NULL;
+  vdata = (ARKBraidVecData)malloc(sizeof(struct _ARKBraidVecData));
+  if (vdata == NULL) return SUNBRAID_ALLOCFAIL;
+
   /* Create vector data */
   vdata->tprior   = RCONST(0.);
   vdata->etascale = RCONST(1.);
@@ -122,7 +161,7 @@ int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
   if (num_conditions > 0)
   {
     vdata->Phi = (realtype *) malloc(num_conditions * sizeof(realtype));
-    if (vdata->Phi == NULL) return SUNBRAID_MEMFAIL;
+    if (vdata->Phi == NULL) return SUNBRAID_ALLOCFAIL;
   }
   return SUNBRAID_SUCCESS;
 }
@@ -221,6 +260,24 @@ int ARKBraid_Free(braid_App *app)
   return SUNBraidApp_FreeEmpty(app);
 }
 
+int ARKBraid_FreeVecData(braid_App app, void *vdata_ptr)
+{
+  ARKBraidVecData vdata;
+
+  if (vdata_ptr == NULL) return SUNBRAID_SUCCESS;
+
+  vdata = (ARKBraidVecData)vdata_ptr;
+
+  if (vdata->Phi != NULL)
+  {
+    free(vdata->Phi);
+    vdata->Phi = NULL;
+  }
+  free(vdata);
+  vdata_ptr = NULL;
+
+  return SUNBRAID_SUCCESS;
+}
 
 /* ----------------------
  * ARKBraid Set Functions
@@ -616,9 +673,8 @@ int ARKBraid_Init(braid_App app, realtype t, braid_Vector *u_ptr)
 {
   int             flag;        /* return flag          */
   N_Vector        y;           /* output N_Vector      */
-  sunrealtype    *order_conds; /* order conditions   */
+  ARKBraidVecData vdata;       /* output ARKBraid vector data (used for Theta method) */
   ARKBraidContent content;     /* ARKBraid app content */
-  ARKBraidVecData vdata;       /* ARKBraid vector data (used for Theta method) */
 
   /* Check input */
   if (app == NULL) return SUNBRAID_ILLINPUT;
@@ -898,24 +954,79 @@ int ARKBraid_TakeStep(void *arkode_mem, realtype tstart, realtype tstop,
   return ARK_SUCCESS;
 }
 
-booleantype _ARKBraid_IsCPoint(int tindex, int cfactor)
+
+
+/* ------------------------
+ * Solve nonlinear systems
+ * ------------------------ */
+
+
+int ARKBraidNlsMem_Create(ARKBraidContent content, ARKBraidNlsMem *nlsmem)
 {
-  if (tindex % cfactor == 0) return SUNTRUE;
-  return SUNFALSE;
+  int flag; /* return flag */
+  int nc;   /* number of order conditions */
+
+  ARKBraidNlsMem mem;  /* output, nonlinear solver memory object */
+
+  /* Check input */ 
+  if (content == NULL) return SUNBRAID_ILLINPUT; 
+  if (content->ark_mem == NULL || content->ark_mem->sunctx == NULL)
+    return SUNBRAID_MEMFAIL;
+
+  /* Access content */
+  ARKodeMem ark_mem = (ARKodeMem) content->ark_mem;
+  SUNContext sunctx = (SUNContext) ark_mem->sunctx;
+  nc = content->num_order_conditions;
+
+  /* Allocate memory */
+  mem = NULL;
+  mem = (ARKBraidNlsMem) malloc(sizeof(struct _ARKBraidNlsMem));
+  if (mem == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->y0 = N_VNew_Serial(nc, sunctx);
+  if (mem->y0 == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->ycur = N_VClone_Serial(mem->y0);
+  if (mem->ycur == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->ycor = N_VClone_Serial(mem->y0);
+  if (mem->ycor == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->w = N_VClone_Serial(mem->y0);
+  if (mem->w == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->x = N_VClone_Serial(mem->y0);
+  if (mem->x == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->A = SUNDenseMatrix(nc, nc, sunctx);
+  if (mem->A == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->LS = SUNLinSol_Dense(mem->y0, mem->A, sunctx);
+  if (mem->LS == NULL) return SUNBRAID_ALLOCFAIL;
+
+  flag = SUNLinSolInitialize(mem->LS);
+  if (flag != SUNLS_SUCCESS) return SUNBRAID_SUNFAIL;
+
+  /* Return nonlinear solver memory */
+  *nlsmem = mem;
+
+  return SUNBRAID_SUCCESS;
 }
 
-int _ARKBraid_GetNumOrderConditions(int fine_order, int coarse_order)
+int ARKBraidNlsMem_Free(ARKBraidNlsMem nlsmem)
 {
-  int num_order_conditions = 0;
+  if (nlsmem == NULL) return SUNBRAID_SUCCESS;
 
-  /* Check if theta method needs computing */
-  if (coarse_order <= coarse_order) return num_order_conditions;
+  N_VDestroy_Serial(nlsmem->y0);
+  N_VDestroy_Serial(nlsmem->ycur);
+  N_VDestroy_Serial(nlsmem->ycor);
+  N_VDestroy_Serial(nlsmem->w);
+  N_VDestroy_Serial(nlsmem->x);
+  SUNMatDestroy(nlsmem->A);
+  SUNLinSolFree(nlsmem->LS);
 
-  /* Compute number of order conditions */
-  if (coarse_order >= 2) num_order_conditions += 1;
-  if (coarse_order >= 3) num_order_conditions += 2;
-  if (coarse_order >= 4) num_order_conditions += 4;
-  if (coarse_order >= 5) num_order_conditions += 9;
+  free(nlsmem);
+  nlsmem = NULL;
 
-  return num_order_conditions;
+  return SUNBRAID_SUCCESS;
 }

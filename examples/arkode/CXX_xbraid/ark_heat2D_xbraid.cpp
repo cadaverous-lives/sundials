@@ -472,6 +472,10 @@ int main(int argc, char* argv[])
   flag = ARKBraid_Create(arkode_mem, &app);
   if (check_flag(&flag, "ARKBraid_Create", 1)) return 1;
 
+  // Set the coarse-grid method order
+  flag = ARKBraid_SetCoarseOrder(app, udata->order + 1);
+  if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
+  
   // Override the default initialization function
   flag = ARKBraid_SetInitFn(app, MyInit);
   if (check_flag(&flag, "ARKBraid_SetInitFn", 1)) return 1;

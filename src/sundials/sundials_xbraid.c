@@ -16,7 +16,6 @@
 
 #include "sundials/sundials_xbraid.h"
 #include "sundials/sundials_math.h"
-#include "sunnonlinsol/sunnonlinsol_newton.h"
 
 #define ONE RCONST(1.0)
 
@@ -85,25 +84,33 @@ int SUNBraidApp_GetVecTmpl(braid_App app, N_Vector *y)
 }
 
 /* Get the size of the buffer to be allocated */
-int SUNBraidApp_GetBufSize(braid_App app, braid_Int* size_ptr)
+int SUNBraidApp_GetBufSize(braid_App app, braid_Int *size_ptr)
 {
   if (app->ops->getbufsize == NULL) return SUNBRAID_OPNULL;
   return app->ops->getbufsize(app, size_ptr);
 }
 
 /* Pack the buffer */
-int SUNBraidApp_BufPack(braid_App app, void* buffer, void* vdata_ptr)
+int SUNBraidApp_BufPack(braid_App app, void* buffer, void *vdata_ptr)
 {
   if (app->ops->bufpack == NULL) return SUNBRAID_OPNULL;
   return app->ops->bufpack(app, buffer, vdata_ptr);
 }
 
 /* Unpack the buffer */
-int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
+int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void **vdata_ptr)
 {
   if (app->ops->bufunpack == NULL) return SUNBRAID_OPNULL;
   return app->ops->bufunpack(app, buffer, vdata_ptr);
 }
+
+/* Free the vector data */
+int SUNBraidApp_FreeVecData(braid_App app, void *vdata_ptr)
+{
+  if (app->ops->freevecdata == NULL) return SUNBRAID_OPNULL;
+  return app->ops->freevecdata(app, vdata_ptr);
+}
+
 
 /* -------------------------
  * SUNBraid Vector Functions

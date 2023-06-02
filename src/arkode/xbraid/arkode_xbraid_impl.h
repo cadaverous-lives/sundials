@@ -18,6 +18,7 @@
 #define _ARKSTEP_XBRAID_IMP_H
 
 #include "sundials/sundials_types.h"
+#include "sundials/sundials_nonlinearsolver.h"
 #include "arkode_impl.h"
 #include "braid.h"
 
@@ -47,6 +48,28 @@ extern "C" {
 #define STEP_FAILED   -1
 #define STEP_SUCCESS   0
 #define STEP_ADAPT     1
+
+
+/* ------------------------
+ * Nonlinear solver memory 
+ * ------------------------ */
+
+
+/* Define ARKBraidNlsData, which should 
+ * serve as a proxy to the integrator memory
+ */
+struct _ARKBraidNlsMem
+{
+  N_Vector y0;
+  N_Vector ycur;
+  N_Vector ycor;
+  N_Vector w;
+  N_Vector x;
+  SUNMatrix A;
+  SUNLinearSolver LS;
+};
+
+typedef struct _ARKBraidNlsMem *ARKBraidNlsMem;
 
 
 /* ------------------------------
@@ -89,6 +112,10 @@ struct _ARKBraidContent
   ARKodeButcherTable **coarse_btables; /* array of Butcher tables for each level */
   ARKodeButcherTable fine_btable;
 
+  /* Nonlinear solver */
+  SUNNonlinearSolver NLS;
+  ARKBraidNlsMem NLS_mem;
+
   /* Output time and state */
   realtype tout;
   N_Vector yout;
@@ -116,6 +143,8 @@ struct _ARKBraidVecData
 };
 
 typedef struct _ARKBraidVecData *ARKBraidVecData;
+
+
 
 
 #ifdef __cplusplus

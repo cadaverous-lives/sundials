@@ -54,7 +54,8 @@ struct _SUNBraidOps
   // 1. Add new “methods” to the SUNBraidOps structure (vtable)
   int (*getbufsize)(braid_App app, braid_Int *size_ptr);
   int (*bufpack)(braid_App app, void* buffer, void *vdata_ptr);
-  int (*bufunpack)(braid_App app, void* buffer, void *vdata_ptr);
+  int (*bufunpack)(braid_App app, void* buffer, void **vdata_ptr);
+  int (*freevecdata)(braid_App app, void *vdata);
 };
 
 /* Pointer to operations structure */
@@ -89,6 +90,8 @@ SUNDIALS_EXPORT int SUNBraidApp_GetBufSize(braid_App app, braid_Int *size_ptr);
 SUNDIALS_EXPORT int SUNBraidApp_BufPack(braid_App app, void* buffer, void* data_ptr);
 
 SUNDIALS_EXPORT int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** data_ptr);
+
+SUNDIALS_EXPORT int SUNBraidApp_FreeVecData(braid_App app, void* data_ptr);
 
 /* -------------------------
  * SUNBraid vector functions

@@ -99,8 +99,11 @@ SUNDIALS_EXPORT int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus);
 SUNDIALS_EXPORT int ARKBraid_GetBufSize(braid_App app, braid_Int *size_ptr);
  
 /* pack/unpack data in/out of the buffer, SUNBraidVector_BufPack will offset the input pointer past the vector data */
-SUNDIALS_EXPORT int ARKBraid_BufPack(braid_App, void *buffer, void *data_ptr);
-SUNDIALS_EXPORT int ARKBraid_BufUnPack(braid_App, void *buffer, void *data_ptr);
+SUNDIALS_EXPORT int ARKBraid_BufPack(braid_App app, void *buffer, void *vdata_ptr);
+SUNDIALS_EXPORT int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ref);
+
+/* free the vector data */
+SUNDIALS_EXPORT int ARKBraid_FreeVecData(braid_App app, void *vdata_ptr);
 
 
 /* -----------------
