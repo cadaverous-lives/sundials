@@ -82,6 +82,7 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   (*app)->ops->getbufsize  = ARKBraid_GetBufSize;
   (*app)->ops->bufpack     = ARKBraid_BufPack;
   (*app)->ops->bufunpack   = ARKBraid_BufUnpack;
+  (*app)->ops->initvecdata = ARKBraidVecData_Init;
   (*app)->ops->freevecdata = ARKBraid_FreeVecData;
 
   /* Create ARKODE interface content */
@@ -140,6 +141,23 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   return SUNBRAID_SUCCESS;
 }
 
+int ARKBraidVecData_Init(braid_App app, void **vdata_ptr)
+{
+  int flag;
+
+  /* Check input */
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Access content */
+  ARKBraidContent content = (ARKBraidContent) app->content;
+
+  /* Create vector data */
+  flag = ARKBraidVecData_Create(content, (ARKBraidVecData *) vdata_ptr);
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  return SUNBRAID_SUCCESS;
+}
+
 int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
 {
   ARKBraidVecData vdata;
@@ -163,6 +181,10 @@ int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
     vdata->Phi = (realtype *) malloc(num_conditions * sizeof(realtype));
     if (vdata->Phi == NULL) return SUNBRAID_ALLOCFAIL;
   }
+
+  /* Attach vector data */
+  *vdata_ptr = vdata;
+
   return SUNBRAID_SUCCESS;
 }
 
@@ -837,16 +859,8 @@ int ARKBraid_Init(braid_App app, realtype t, braid_Vector *u_ptr)
   if (!arkAllocVec(content->ark_mem, content->ark_mem->yn, &y))
     return SUNBRAID_ALLOCFAIL;
 
-  /* Create new vector data */
-  vdata = NULL;
-  flag = ARKBraidVecData_Create(content, &vdata);
-  if (flag != SUNBRAID_SUCCESS) return flag;
-
   /* Create new XBraid vector */
-  flag = SUNBraidVector_New(y, u_ptr);
-  if (flag != SUNBRAID_SUCCESS) return flag;
-
-  flag = SUNBraidVector_SetVecData(*u_ptr, (void *)vdata);
+  flag = SUNBraidVector_New(app, y, u_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Set initial solution at all time points */
@@ -935,6 +949,10 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
   /* Need to store the fine-grid butcher table */
   if (content->fine_btable == NULL)
   {
+    /* Initialize arkode_mem so that there is a valid Butcher table */   
+    flag = arkStep_SetButcherTables(content->ark_mem);
+    CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
     /* Get the ARKStep memory */
     step_mem = (ARKodeARKStepMem) content->ark_mem->step_mem;
 

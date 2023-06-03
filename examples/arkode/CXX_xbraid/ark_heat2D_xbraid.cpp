@@ -1014,7 +1014,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   // Integrator settings
   udata->rtol        = RCONST(1.e-5);   // relative tolerance
   udata->atol        = RCONST(1.e-10);  // absolute tolerance
-  udata->order       = 1;               // method order
+  udata->order       = 2;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
 

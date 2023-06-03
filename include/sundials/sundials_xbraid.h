@@ -53,6 +53,7 @@ struct _SUNBraidOps
   /* Required */
   int (*getvectmpl)(braid_App app, N_Vector *tmpl);
   /* Optional */
+  int (*initvecdata)(braid_App app, void **vdata_ptr);
   int (*freevecdata)(braid_App app, void *vdata);
   int (*clonevecdata)(braid_App app, void *vdata, void **vdata_clone);
   int (*sumvecdata)(braid_App app, braid_Real a, void *vdata_x, braid_Real b, void **vdata_y);
@@ -90,17 +91,19 @@ SUNDIALS_EXPORT int SUNBraidApp_GetVecTmpl(braid_App app, N_Vector *tmpl);
 
 // 2. Add generic version of these functions (declare in include/sundials/sundials_xbraid.h and define in src/sundials/sundials_xbraid.c) e.g.,
 /* Optional ops */
-SUNDIALS_EXPORT int SUNBraidApp_FreeVecData(braid_App app, void* data_ptr);
+SUNDIALS_EXPORT int SUNBraidApp_InitVecData(braid_App app, void** vdata_ptr);
 
-SUNDIALS_EXPORT int SUNBraidApp_CloneVecData(braid_App app, void* data_ptr, void** data_clone_ptr);
+SUNDIALS_EXPORT int SUNBraidApp_FreeVecData(braid_App app, void* vdata);
 
-SUNDIALS_EXPORT int SUNBraidApp_SumVecData(braid_App app, braid_Real a, void* data_x_ptr, braid_Real b, void* data_y_ptr);
+SUNDIALS_EXPORT int SUNBraidApp_CloneVecData(braid_App app, void* vdata, void** vdata_clone_ptr);
+
+SUNDIALS_EXPORT int SUNBraidApp_SumVecData(braid_App app, braid_Real a, void* vdata_x, braid_Real b, void* vdata_y);
 
 SUNDIALS_EXPORT int SUNBraidApp_GetBufSize(braid_App app, braid_Int *size_ptr);
 
-SUNDIALS_EXPORT int SUNBraidApp_BufPack(braid_App app, void* buffer, void* data_ptr);
+SUNDIALS_EXPORT int SUNBraidApp_BufPack(braid_App app, void* buffer, void* vdata);
 
-SUNDIALS_EXPORT int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** data_ptr);
+SUNDIALS_EXPORT int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** vdata_ptr);
 
 
 /* -------------------------
@@ -108,7 +111,7 @@ SUNDIALS_EXPORT int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void** da
  * ------------------------- */
 
 
-SUNDIALS_EXPORT int SUNBraidVector_New(N_Vector y, SUNBraidVector *u);
+SUNDIALS_EXPORT int SUNBraidVector_New(braid_App app, N_Vector y, SUNBraidVector *u);
 
 SUNDIALS_EXPORT int SUNBraidVector_SetVecData(void *vdata, SUNBraidVector *u);
 

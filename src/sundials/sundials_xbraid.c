@@ -47,6 +47,7 @@ int SUNBraidApp_NewEmpty(braid_App *app)
 
   /* Initialize operations to NULL */
   ops->getvectmpl   = NULL;
+  ops->initvecdata  = NULL;
   ops->freevecdata  = NULL;
   ops->clonevecdata = NULL;
   ops->sumvecdata   = NULL;
@@ -110,6 +111,14 @@ int SUNBraidApp_BufUnpack(braid_App app, void* buffer, void **vdata_ptr)
   return app->ops->bufunpack(app, buffer, vdata_ptr);
 }
 
+
+/* Initialize the vector data */
+int SUNBraidApp_InitVecData(braid_App app, void** vdata_ptr)
+{
+  if (app->ops->initvecdata == NULL) return SUNBRAID_OPNULL;
+  return app->ops->initvecdata(app, vdata_ptr);
+}
+
 /* Free the vector data */
 int SUNBraidApp_FreeVecData(braid_App app, void *vdata_ptr)
 {
@@ -137,7 +146,7 @@ int SUNBraidApp_SumVecData(braid_App app, braid_Real a, void* data_x_ptr, braid_
 
 
 /* Create a new vector wrapper */
-int SUNBraidVector_New(N_Vector y, SUNBraidVector *u)
+int SUNBraidVector_New(braid_App app, N_Vector y, SUNBraidVector *u)
 {
   /* Check for valid N_Vector */
   if (y == NULL) return SUNBRAID_ILLINPUT;
@@ -150,6 +159,9 @@ int SUNBraidVector_New(N_Vector y, SUNBraidVector *u)
   /* Attach N_Vector */
   (*u)->y     = y;
   (*u)->vdata = NULL;
+
+  /* Initialize vector data */
+  SUNBraidApp_InitVecData(app, &((*u)->vdata));
 
   return SUNBRAID_SUCCESS;
 }
@@ -193,6 +205,32 @@ int SUNBraidVector_GetVecData(SUNBraidVector u, void **vdata_ptr)
   return SUNBRAID_SUCCESS;
 }
 
+/* Init wrapper function for XBraid */
+int SUNBraidVector_Init(braid_App app, realtype t, braid_Vector *u_ptr)
+{
+  int      flag;
+  N_Vector vy;
+
+  /* Check for valid app */
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Get template vector */
+  flag = SUNBraidApp_GetVecTmpl(app, &vy);
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Create new vector wrapper */
+  flag = SUNBraidVector_New(vy, u_ptr);
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Initialize vector data */
+  flag = SUNBraidApp_InitVecData(app, &((*u_ptr)->vdata));
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  /* Initialize vector data */
+  N_VConst(ZERO, vy);
+
+  return SUNBRAID_SUCCESS;
+}
 
 /* Create clone of an existing vector */
 int SUNBraidVector_Clone(braid_App app, braid_Vector u, braid_Vector *v_ptr)
