@@ -17,7 +17,8 @@
 #include "sundials/sundials_xbraid.h"
 #include "sundials/sundials_math.h"
 
-#define ONE RCONST(1.0)
+#define ONE  RCONST(1.0)
+#define ZERO RCONST(0.0)
 
 
 /* -------------------------
@@ -219,7 +220,7 @@ int SUNBraidVector_Init(braid_App app, realtype t, braid_Vector *u_ptr)
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Create new vector wrapper */
-  flag = SUNBraidVector_New(vy, u_ptr);
+  flag = SUNBraidVector_New(app, vy, u_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Initialize vector data */
@@ -247,7 +248,7 @@ int SUNBraidVector_Clone(braid_App app, braid_Vector u, braid_Vector *v_ptr)
   if (vy == NULL) return SUNBRAID_ALLOCFAIL;
 
   /* Create new vector wrapper */
-  flag = SUNBraidVector_New(vy, v_ptr);
+  flag = SUNBraidVector_New(app, vy, v_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Copy data from u to v */
@@ -393,7 +394,7 @@ int SUNBraidVector_BufUnpack(braid_App app, void *buffer, braid_Vector *u_ptr,
   if (y == NULL) return SUNBRAID_ALLOCFAIL;
 
   /* Create new XBraid vector */
-  flag = SUNBraidVector_New(y, u_ptr);
+  flag = SUNBraidVector_New(app, y, u_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Unpack buffer */

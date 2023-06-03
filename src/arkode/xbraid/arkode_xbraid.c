@@ -82,7 +82,7 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   (*app)->ops->getbufsize  = ARKBraid_GetBufSize;
   (*app)->ops->bufpack     = ARKBraid_BufPack;
   (*app)->ops->bufunpack   = ARKBraid_BufUnpack;
-  (*app)->ops->initvecdata = ARKBraidVecData_Init;
+  (*app)->ops->initvecdata = ARKBraid_InitVecData;
   (*app)->ops->freevecdata = ARKBraid_FreeVecData;
 
   /* Create ARKODE interface content */
@@ -141,30 +141,19 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   return SUNBRAID_SUCCESS;
 }
 
-int ARKBraidVecData_Init(braid_App app, void **vdata_ptr)
+int ARKBraid_InitVecData(braid_App app, void **vdata_ptr)
 {
   int flag;
+  ARKBraidVecData vdata;
 
   /* Check input */
   if (app == NULL) return SUNBRAID_ILLINPUT;
 
   /* Access content */
   ARKBraidContent content = (ARKBraidContent) app->content;
-
-  /* Create vector data */
-  flag = ARKBraidVecData_Create(content, (ARKBraidVecData *) vdata_ptr);
-  if (flag != SUNBRAID_SUCCESS) return flag;
-
-  return SUNBRAID_SUCCESS;
-}
-
-int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
-{
-  ARKBraidVecData vdata;
-
-  /* Check input */
   if (content == NULL) return SUNBRAID_ILLINPUT;
 
+  /* Create vector data */
   vdata = NULL;
   vdata = (ARKBraidVecData)malloc(sizeof(struct _ARKBraidVecData));
   if (vdata == NULL) return SUNBRAID_ALLOCFAIL;
@@ -183,10 +172,11 @@ int ARKBraidVecData_Create(ARKBraidContent content, ARKBraidVecData *vdata_ptr)
   }
 
   /* Attach vector data */
-  *vdata_ptr = vdata;
+  *vdata_ptr = (void*)vdata;
 
   return SUNBRAID_SUCCESS;
 }
+
 
 /* Initialize XBraid, attach interface functions */
 int ARKBraid_BraidInit(MPI_Comm comm_w, MPI_Comm comm_t, realtype tstart,
@@ -1058,8 +1048,10 @@ int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ptr)
   ARKBraidContent content = (ARKBraidContent) app->content;
   
   /* Allocate vdata */
-  flag = ARKBraidVecData_Create(content, &vdata);
+  flag = ARKBraid_InitVecData(content, vdata_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
+
+  vdata = (ARKBraidVecData) *vdata_ptr;
 
   /* Copy data from buffer */
   realtype *buf = (realtype *) buffer;

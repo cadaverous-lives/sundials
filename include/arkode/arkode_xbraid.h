@@ -102,6 +102,9 @@ SUNDIALS_EXPORT int ARKBraid_GetBufSize(braid_App app, braid_Int *size_ptr);
 SUNDIALS_EXPORT int ARKBraid_BufPack(braid_App app, void *buffer, void *vdata_ptr);
 SUNDIALS_EXPORT int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ref);
 
+/* initialize the vector data */
+SUNDIALS_EXPORT int ARKBraid_InitVecData(braid_App app, void **vdata_ptr);
+
 /* free the vector data */
 SUNDIALS_EXPORT int ARKBraid_FreeVecData(braid_App app, void *vdata_ptr);
 
