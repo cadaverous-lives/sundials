@@ -33,6 +33,11 @@ void _theta_esdirk2_btable_c(sunrealtype* c, const sunrealtype* th)
   c[1] = RCONST(1.0);
 }
 
+void _theta_esdirk2_guess(sunrealtype* guess)
+{
+  guess[0] = RCONST(0.5);
+}
+
 /* theta_sdirk2 */
 
 void _theta_sdirk2_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
@@ -63,6 +68,11 @@ void _theta_sdirk2_btable_c(sunrealtype* c, const sunrealtype* th)
 {
   c[0] = th[0];
   c[1] = RCONST(1.0);
+}
+
+void _theta_sdirk2_guess(sunrealtype* guess)
+{
+  guess[0] = RCONST(0.2928932188134524);
 }
 
 /* theta_esdirk3 */
@@ -114,6 +124,13 @@ void _theta_esdirk3_btable_c(sunrealtype* c, const sunrealtype* th)
   c[2] = RCONST(1.0);
 }
 
+void _theta_esdirk3_guess(sunrealtype* guess)
+{
+  guess[0] = RCONST(0.21132486540518713);
+  guess[1] = RCONST(0.4226497308103742);
+  guess[2] = RCONST(0.1056624327025936);
+}
+
 /* theta_sdirk3 */
 
 void _theta_sdirk3_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
@@ -161,5 +178,12 @@ void _theta_sdirk3_btable_c(sunrealtype* c, const sunrealtype* th)
   c[0] = th[0];
   c[1] = th[1];
   c[2] = RCONST(1.0);
+}
+
+void _theta_sdirk3_guess(sunrealtype* guess)
+{
+  guess[0] = RCONST(0.4358665215);
+  guess[1] = RCONST(0.71793326075);
+  guess[2] = RCONST(-0.6443631706532353);
 }
 

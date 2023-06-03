@@ -66,9 +66,9 @@ static int _ARKBraid_GetNumOrderConditions(int fine_order, int coarse_order)
 /* Create XBraid app strucutre */
 int ARKBraid_Create(void *arkode_mem, braid_App *app)
 {
-  int             flag;
-  ARKBraidContent content;
-  ARKodeButcherTable Bi, Be;
+  int              flag;
+  ARKBraidContent  content;
+  ARKodeARKStepMem step_mem;
 
   /* Check input */
   if (arkode_mem == NULL) return SUNBRAID_ILLINPUT;
@@ -117,14 +117,14 @@ int ARKBraid_Create(void *arkode_mem, braid_App *app)
   content->flag_skip_downcycle   = SUNTRUE;
 
   /* Fine and coarse grid method orders */
-  ARKStepGetCurrentButcherTables(content->ark_mem, &Bi, &Be);
-  if (Bi == NULL && Be == NULL) return SUNBRAID_ILLINPUT;
-  if (Bi != NULL)
-    content->order_fine = Bi->q;
-  else
-    content->order_fine = Be->q;
-  // TODO: should this default to order_fine + 1?
-  content->order_coarse = content->order_fine;
+
+  if (content->ark_mem->step_mem == NULL) return SUNBRAID_ILLINPUT;
+  step_mem = (ARKodeARKStepMem) content->ark_mem->step_mem;
+
+  content->order_fine   = step_mem->q;
+  // TODO: should this default to q + 1?
+  content->order_coarse = step_mem->q;
+
   content->num_order_conditions = _ARKBraid_GetNumOrderConditions(
     content->order_fine, content->order_coarse
   );
@@ -200,12 +200,157 @@ int ARKBraid_BraidInit(MPI_Comm comm_w, MPI_Comm comm_t, realtype tstart,
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
   /* Set sync function */
-  braid_flag = braid_SetSync(core, ARKBraid_Sync);
+  braid_flag = braid_SetSync(*core, ARKBraid_Sync);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
   return SUNBRAID_SUCCESS;
 }
 
+/* Set coarse grid Butcher table given theta parameters */
+static int _ARKBraid_SetBtable(ARKodeButcherTable B, ARKBraidContent content, realtype *theta)
+{
+  /* TODO: get/store somewhere the actual number of stages */
+  int         s;     /* Number of stages                                 */
+  booleantype guess; /* If we don't know theta, provide an initial guess */
+  realtype   *A;     /* Butcher table entries                            */
+
+  /* Check inputs */
+  if (B == NULL || content == NULL) return SUNBRAID_ILLINPUT;
+  guess = (theta == NULL);
+
+  s = B->stages;
+
+  A = (realtype*) malloc(s*s*sizeof(realtype));
+  if (A == NULL) return SUNBRAID_ALLOCFAIL;
+
+  if (guess)
+  {
+    theta = (realtype*) malloc(content->num_order_conditions*sizeof(realtype));
+    if (theta == NULL) { free(A); return SUNBRAID_ALLOCFAIL; }
+  }
+
+  if (content->order_coarse == 2)
+  {
+    if (guess) _theta_sdirk2_guess(theta);
+
+    _theta_sdirk2_btable_A(A, theta);
+    _theta_sdirk2_btable_b(B->b, theta);
+    _theta_sdirk2_btable_c(B->c, theta);
+    B->q = 1;
+    B->p = 1;
+  }
+  else if (content->order_coarse == 3)
+  {
+    if (guess) _theta_sdirk3_guess(theta);
+
+    _theta_sdirk3_btable_A(A, theta);
+    _theta_sdirk3_btable_b(B->b, theta);
+    _theta_sdirk3_btable_c(B->c, theta);
+    B->q = 2;
+    B->p = 2;
+  }
+  else
+  {
+    free(A);
+    if (guess) free(theta);
+    return SUNBRAID_ILLINPUT;
+  }
+
+  for (int i=0; i<s; i++)
+  {
+    for (int j=0; j<s; j++)
+    {
+      B->A[i][j] = A[i*s+j];
+    }
+  } 
+
+  free(A);
+  if (guess) free(theta);
+  return SUNBRAID_SUCCESS;
+}
+
+/* returns the Butcher table to be used for index ti on the given level */
+static int _ARKBraid_GetBTable(ARKBraidContent content, braid_StepStatus status, braid_Int level, braid_Int ti, ARKodeButcherTable* B)
+{
+  int flag;    /* return flag */
+  int iu, il;  /* upper and lower indices for the current level */
+  int tir;     /* time index, relative to first time point owned by current proc */
+  
+  /* Get the coarse (relative) time index */
+  flag = braid_StepStatusGetTIUL(status, &iu, &il, level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  tir = ti - il;
+
+  if (level == 0 || content->order_coarse <= content->order_fine 
+                 || content->coarse_btables == NULL 
+                 || content->coarse_btables[level] == NULL 
+                 || content->coarse_btables[level][tir] == NULL) 
+  {
+    /* Use the fine table */
+    *B = content->fine_btable;
+  } 
+  else 
+  {
+    /* Use the coarse table */
+    *B = content->coarse_btables[level][tir];
+  }
+  return SUNBRAID_SUCCESS;
+}
+
+static int _ARKBraid_AllocCGBtables(ARKBraidContent content, braid_SyncStatus sstatus)
+{
+  int flag;     /* Return flag */
+  int ntpoints; /* Number of time-points on this level */
+  int ns;       /* Number of theta method stages */
+  int nlevels;  /* Number of levels in MGRIT hierarchy */
+  int iu, il;   /* Highest and lowest time points owned by this proc */
+
+  /* Check input */
+  if (content == NULL || sstatus == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Query XBraid status */
+  flag = braid_SyncStatusGetNLevels(sstatus, &nlevels);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+
+  content->num_levels = nlevels;
+
+  content->coarse_btables = (ARKodeButcherTable **) malloc((nlevels-1) * sizeof(ARKodeButcherTable*));
+  if (content->coarse_btables == NULL) return SUNBRAID_ALLOCFAIL;
+  content->coarse_btables -= 1; /* offset array by one, since we are storing nothing for lvl 0 */
+
+  content->num_tables = (int *) malloc((nlevels-1) * sizeof(int));
+  if (content->num_tables == NULL) return SUNBRAID_ALLOCFAIL;
+  content->num_tables -= 1; /* offset array by one, since we are storing nothing for lvl 0 */
+
+  /* TODO: This is obviously not going to generalize past order 3 */
+  ns = content->order_coarse;
+
+  /* Preallocate Butcher tables for each coarse level */
+
+  for (int lvl = 1; lvl < nlevels; lvl++)
+  {
+    content->coarse_btables[lvl] = NULL;
+
+    flag = braid_SyncStatusGetTIUL(sstatus, &iu, &il, lvl);
+    CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+
+    ntpoints = iu - il + 1;
+    content->num_tables[lvl] = ntpoints;
+    content->coarse_btables[lvl] = (ARKodeButcherTable *) malloc(ntpoints * sizeof(ARKodeButcherTable));
+    if (content->coarse_btables[lvl] == NULL) return SUNBRAID_ALLOCFAIL;
+
+    for (int ti = 0; ti < ntpoints; ti++)
+    {
+      content->coarse_btables[lvl][ti] = NULL;
+      content->coarse_btables[lvl][ti] = ARKodeButcherTable_Alloc(ns, 0);
+      if (content->coarse_btables[lvl][ti] == NULL) return SUNBRAID_ALLOCFAIL;
+      /* Set a sensible default */
+      _ARKBraid_SetBtable(content->coarse_btables[lvl][ti], content, NULL);
+    }
+  }
+
+  return SUNBRAID_SUCCESS;
+}
 
 static int _ARKBraid_FreeCGBtables(ARKBraidContent content)
 {
@@ -460,33 +605,6 @@ int ARKBraid_GetSolution(braid_App app, realtype *tout, N_Vector yout)
   return SUNBRAID_SUCCESS;
 }
 
-/* returns the Butcher table to be used for index ti on the given level */
-static int _ARKBraid_GetBTable(ARKBraidContent content, braid_StepStatus status, braid_Int level, braid_Int ti, ARKodeButcherTable* B)
-{
-  int flag;    /* return flag */
-  int iu, il;  /* upper and lower indices for the current level */
-  int tir;     /* time index, relative to first time point owned by current proc */
-  
-  /* Get the coarse (relative) time index */
-  flag = braid_StepStatusGetTIUL(status, &iu, &il, level);
-  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
-  tir = ti - il;
-
-  if (level == 0 || content->order_coarse <= content->order_fine 
-                 || content->coarse_btables == NULL 
-                 || content->coarse_btables[level] == NULL 
-                 || content->coarse_btables[level][tir] == NULL) 
-  {
-    /* Use the fine table */
-    *B = content->fine_btable;
-  } 
-  else 
-  {
-    /* Use the coarse table */
-    *B = content->coarse_btables[level][tir];
-  }
-  return SUNBRAID_SUCCESS;
-}
 
 
 /* --------------------------
@@ -504,15 +622,16 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   int             level;       /* current level                    */
   int             rfac;        /* refinement factor                */
   int             cfactor;     /* coarsening factor                */
-  int             ti;          /* time index                       */
+  int             ti, tic;     /* time indices for fine and coarse */
+  int             iu, il;      /* upper and lower indices this proc owns */
   int             caller;      /* caller of ARKBraid_Step          */
+  int             fixedstep;   /* flag for fixed step size         */
   realtype        tstart;      /* current time                     */
   realtype        tstop;       /* evolve to this time              */
   realtype        eta, eta_pr; /* normalized time step sizes       */
   realtype        eta_c;       /* predicted normalized coarse step */
   realtype        hacc;        /* accuracy based step size         */
-  ARKBraidContent content;     /* ARKBraid app content             */
-  ARKodeMem       ark_mem;     /* ARKode memory                    */
+  ARKBraidContent  content;     /* ARKBraid app content             */
 
   ARKodeButcherTable  B = NULL;  /* Butcher table for the step  */
   ARKBraidVecData vdata = NULL;  /* vector data for storing order conditions */
@@ -523,9 +642,11 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Access app content */
   content = (ARKBraidContent) app->content;
-  ARKBraid_GetARKStepMem(app, &ark_mem);
 
   if (content->ark_mem == NULL) return SUNBRAID_MEMFAIL;
+
+  /* Remember if we are using fixed time-stepping */
+  fixedstep = (content->ark_mem->fixedstep);
 
   /* Get info from XBraid */
   braid_flag = braid_StepStatusGetTstartTstop(status, &tstart, &tstop);
@@ -544,15 +665,8 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Get Butcher table for this step */
   _ARKBraid_GetBTable(content, status, level, ti, &B);
   if (B == NULL) return SUNBRAID_MEMFAIL;
-
-  /* Set the Butcher table TODO: support for explicit methods */
-  // if (app->explicit && level == 0)
-  //   flag = ARKStepSetTables(ark_mem, B->q, B->p, NULL, B);
-  // else
-  flag = ARKStepSetTables(ark_mem, B->q, B->p, B, NULL);
-  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
   
-  /* Compute order conditions */
+  /* Compute theta method order conditions */
 
   /* F-relax */
   booleantype frelax = (caller == braid_ASCaller_FRestrict 
@@ -589,9 +703,9 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
     phi_pr = (realtype*) malloc(content->num_order_conditions * sizeof(realtype));
     if (phi_pr == NULL) return SUNBRAID_MEMFAIL;
 
-    /* Compute order conditions */
+    /* Compute elementary weights */
 
-    /* Store prior order conditions */
+    /* Temporarily copy prior weights */
     for (int i=0; i < content->num_order_conditions; i++)
       phi_pr[i] = vdata->Phi[i];
 
@@ -613,28 +727,61 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
     /* Last step of f-interval */
     if (_ARKBraid_IsCPoint(ti+1, cfactor))
     {
-      /* Normalize order conditions */
+      /* Normalize weights */
       eta_c = (tstop - vdata->tprior) / vdata->etascale;
 
       /* Second order */
-      vdata->Phi[0] /= eta_c * eta_c;
+      vdata->Phi[0] /= SUNRpowerI(eta_c, 2);
 
       /* Third order */
       if (content->order_coarse >= 3)
       {
-        vdata->Phi[1] /= eta_c * eta_c * eta_c;
-        vdata->Phi[2] /= eta_c * eta_c * eta_c;
+        vdata->Phi[1] /= SUNRpowerI(eta_c, 3);
+        vdata->Phi[2] /= SUNRpowerI(eta_c, 3);
       }
+
+      /* Here is where we would solve order conditions */
+      
+      /* For now just do nothing */
+      /* Set the Butcher table */
+
+      /* Computing on level for level + 1 */
+      // braid_flag = braid_StepStatusGetTIUL(status, &iu, &il, level+1);
+      // CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+      // tic = ti / cfactor - il;
+      // _ARKBraid_SetBtable(B, content, theta);
+      // content->coarse_btables[level+1][tic] = B;
     }
 
     free(phi_step);
     free(phi_pr);
   }
 
+  /* Turn off computation of elementary weights once upcycle starts */
+  if (content->flag_refine_downcycle && caller == braid_ASCaller_FInterp)
+  {
+    printf("Turning off elementary weight computation\n");
+    content->flag_refine_downcycle = SUNFALSE;
+  }
+
+  /* Turn off error estimation on coarse grids */
+  // if (level > 0)
+  //   arkSetFixedStep(content->ark_mem, tstop - tstart);
+
+  /* Set the Butcher table TODO: support for explicit methods */
+  // if (app->explicit && level == 0)
+  //   flag = ARKStepSetTables(ark_mem, B->q, B->p, NULL, B);
+  // else
+  flag = ARKStepSetTables(content->ark_mem, B->q, B->p, B, NULL);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
   /* Finally propagate the solution */
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
                            &ark_flag);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
+  /* Restore fixedstep value */
+  content->ark_mem->fixedstep = fixedstep;
 
   /* Refine grid (XBraid will ignore if refinement is disabled) */
 
@@ -697,6 +844,9 @@ int ARKBraid_Init(braid_App app, realtype t, braid_Vector *u_ptr)
 
   /* Create new XBraid vector */
   flag = SUNBraidVector_New(y, u_ptr);
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
+  flag = SUNBraidVector_SetVecData(*u_ptr, (void *)vdata);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Set initial solution at all time points */
@@ -774,12 +924,29 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
   int             iter;            /* XBraid iteration */
   int             iu, il;          /* XBraid index of lowest and highest time indices owned by this processor */
   int             ncpoints;        /* XBraid number of coarse grid points */
+  ARKodeARKStepMem step_mem;       /* ARKStep memory */
 
   /* Check input */
   if (app == NULL || sstatus == NULL) return SUNBRAID_ILLINPUT;
 
   /* Access app content */
   content = (ARKBraidContent) app->content;
+
+  /* Need to store the fine-grid butcher table */
+  if (content->fine_btable == NULL)
+  {
+    /* Get the ARKStep memory */
+    step_mem = (ARKodeARKStepMem) content->ark_mem->step_mem;
+
+    /* Get the fine-grid butcher table */
+    if (step_mem->Be != NULL) 
+      content->fine_btable = ARKodeButcherTable_Copy(step_mem->Be);
+    else if (step_mem->Bi != NULL)
+      content->fine_btable = ARKodeButcherTable_Copy(step_mem->Bi);
+    else
+      return SUNBRAID_ILLINPUT;
+  }
+
 
   /* Check that theta method needs computing */
   if (content->order_fine >= content->order_coarse) return SUNBRAID_SUCCESS;
@@ -800,21 +967,15 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
     _ARKBraid_FreeCGBtables(content);
 
     /* Allocate memory for coarse grid butcher tables */
-    content->coarse_btables = (ARKodeButcherTable **) malloc((nlevels-1) * sizeof(ARKodeButcherTable*));
-    if (content->coarse_btables == NULL) return SUNBRAID_ALLOCFAIL;
-
-    for (int level = 1; level < nlevels; level++)
-    {
-      flag = braid_SyncStatusGetTIUL(sstatus, &iu, &il, level);
-      CHECK_BRAID_RETURN(content->last_flag_braid, flag);
-
-      ncpoints = iu - il + 1;
-      content->coarse_btables[level-1] = (ARKodeButcherTable *) malloc(ncpoints * sizeof(ARKodeButcherTable));
-    }
+    flag = _ARKBraid_AllocCGBtables(content, sstatus);
+    if (flag != SUNBRAID_SUCCESS) return flag;
 
     /* Turn on computation of coarse grid Butcher tables */
-    content->flag_refine_downcycle = SUNTRUE;
-    printf("ARKBraid: Computing coarse grid Butcher tables\n");
+    if (nlevels > 1)
+    {
+      content->flag_refine_downcycle = SUNTRUE;
+      printf("ARKBraid: Computing coarse grid Butcher tables\n");
+    }
   }
 
   /* make sure this is still computed even when we skip the first downcycle */

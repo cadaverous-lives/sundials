@@ -1014,7 +1014,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   // Integrator settings
   udata->rtol        = RCONST(1.e-5);   // relative tolerance
   udata->atol        = RCONST(1.e-10);  // absolute tolerance
-  udata->order       = 3;               // method order
+  udata->order       = 1;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
 
@@ -1044,14 +1044,14 @@ static int InitUserData(UserData *udata, SUNContext ctx)
 
   // Xbraid
   udata->x_tol           = 1.0e-6;
-  udata->x_nt            = 300;
-  udata->x_skip          = 1;
-  udata->x_max_levels    = 15;
+  udata->x_nt            = 16;
+  udata->x_skip          = 0;
+  udata->x_max_levels    = 2;
   udata->x_min_coarse    = 3;
   udata->x_nrelax        = 1;
   udata->x_nrelax0       = -1;
   udata->x_tnorm         = 2;
-  udata->x_cfactor       = 2;
+  udata->x_cfactor       = 4;
   udata->x_cfactor0      = -1;
   udata->x_max_iter      = 100;
   udata->x_storage       = -1;
@@ -1304,7 +1304,7 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
   udata->dy = (udata->yu) / (udata->ny - 1);
 
   // If the method order is 1 the XBraid refinement must be disabled
-  if (udata->order == 1 && !(udata->x_refine))
+  if (udata->order == 1 && udata->x_refine)
   {
     cerr << "ERROR: Method order 1 requires fixed time stepping" << endl;
     return -1;

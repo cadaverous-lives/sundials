@@ -173,6 +173,36 @@ ARKodeButcherTable ARKodeButcherTable_Create(int s, int q, int p, realtype *c,
   return(B);
 }
 
+/*------------------------------------------------------
+  Routine to fill a preallocated Butcher table structure
+  ------------------------------------------------------*/
+void ARKodeButcherTable_Fill(ARKodeButcherTable B, realtype *c, realtype *A, realtype *b, realtype *d)
+{
+  int i, j;
+
+  /* Check input */
+  if (B == NULL) return;
+
+  for (i=0; i<B->stages; i++) {
+    B->c[i] = c[i];
+    B->b[i] = b[i];
+    for (j=0; j<B->stages; j++) {
+      B->A[i][j] = A[i*B->stages + j];
+    }
+  }
+
+  if (B->d != NULL && d != NULL)
+    for (i=0; i<B->stages; i++)
+      B->d[i] = d[i];
+  else if (d == NULL) {
+    if (B->d != NULL) free(B->d);
+    B->d = NULL;
+  }
+
+  return;
+}
+
+
 
 /*---------------------------------------------------------------
   Routine to copy a Butcher table structure

@@ -46,7 +46,13 @@ int SUNBraidApp_NewEmpty(braid_App *app)
   }
 
   /* Initialize operations to NULL */
-  ops->getvectmpl = NULL;
+  ops->getvectmpl   = NULL;
+  ops->freevecdata  = NULL;
+  ops->clonevecdata = NULL;
+  ops->sumvecdata   = NULL;
+  ops->getbufsize   = NULL;
+  ops->bufpack      = NULL;
+  ops->bufunpack    = NULL;
 
   /* Attach operations and initialize content to NULL */
   (*app)->ops     = ops;
@@ -111,6 +117,19 @@ int SUNBraidApp_FreeVecData(braid_App app, void *vdata_ptr)
   return app->ops->freevecdata(app, vdata_ptr);
 }
 
+/* Copy vector data */
+int SUNBraidApp_CloneVecData(braid_App app, void* data_ptr, void** data_clone_ptr)
+{
+  if (app->ops->clonevecdata == NULL) return SUNBRAID_OPNULL;
+  return app->ops->clonevecdata(app, data_ptr, data_clone_ptr);
+}
+
+/* Sum vector data */
+int SUNBraidApp_SumVecData(braid_App app, braid_Real a, void* data_x_ptr, braid_Real b, void* data_y_ptr)
+{
+  if (app->ops->sumvecdata == NULL) return SUNBRAID_OPNULL;
+  return app->ops->sumvecdata(app, a, data_x_ptr, b, data_y_ptr);
+}
 
 /* -------------------------
  * SUNBraid Vector Functions
@@ -129,7 +148,21 @@ int SUNBraidVector_New(N_Vector y, SUNBraidVector *u)
   if (*u == NULL) return SUNBRAID_ALLOCFAIL;
 
   /* Attach N_Vector */
-  (*u)->y = y;
+  (*u)->y     = y;
+  (*u)->vdata = NULL;
+
+  return SUNBRAID_SUCCESS;
+}
+
+
+/* Attach auxiliary vector data */
+int SUNBraidVector_SetVecData(void *vdata, SUNBraidVector *u)
+{
+  /* Check for valid wrapper */
+  if (u == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Attach vector data */
+  (*u)->vdata = vdata;
 
   return SUNBRAID_SUCCESS;
 }
@@ -144,6 +177,18 @@ int SUNBraidVector_GetNVector(SUNBraidVector u, N_Vector *y)
 
   /* Extract NVector */
   *y = u->y;
+
+  return SUNBRAID_SUCCESS;
+}
+
+/* Get the wrapped vector data */
+int SUNBraidVector_GetVecData(SUNBraidVector u, void **vdata_ptr)
+{
+  /* Check for valid wrapper */
+  if (u == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Extract vector data */
+  *vdata_ptr = u->vdata;
 
   return SUNBRAID_SUCCESS;
 }
@@ -170,6 +215,10 @@ int SUNBraidVector_Clone(braid_App app, braid_Vector u, braid_Vector *v_ptr)
   /* Copy data from u to v */
   N_VScale(ONE, u->y, vy);
 
+  /* Copy the vector data */
+  flag = SUNBraidApp_CloneVecData(app, u->vdata, &((*v_ptr)->vdata));
+  if (flag != SUNBRAID_SUCCESS) return flag;
+
   return SUNBRAID_SUCCESS;
 }
 
@@ -185,6 +234,13 @@ int SUNBraidVector_Free(braid_App app, braid_Vector u)
   {
     N_VDestroy(u->y);
     u->y = NULL;
+  }
+
+  /* Destroy vector data */
+  if (u->vdata != NULL)
+  {
+    SUNBraidApp_FreeVecData(app, u->vdata);
+    u->vdata = NULL;
   }
 
   /* Destroy SUNBraidVector wrapper */
@@ -205,6 +261,9 @@ int SUNBraidVector_Sum(braid_App app, braid_Real alpha, braid_Vector x,
 
   /* Compute linear sum */
   N_VLinearSum(alpha, x->y, beta, y->y, y->y);
+
+  /* Sum vector data */
+  SUNBraidApp_SumVecData(app, alpha, x->vdata, beta, y->vdata);
   return SUNBRAID_SUCCESS;
 }
 
