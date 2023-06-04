@@ -241,31 +241,29 @@ static int _ARKBraid_SetBtable(ARKodeButcherTable B, ARKBraidContent content, re
     if (theta == NULL) { free(A); return SUNBRAID_ALLOCFAIL; }
   }
 
-  if (content->order_coarse == 2)
+  /* Set Butcher table */
+  switch (content->order_coarse)
   {
-    if (guess) _theta_sdirk2_guess(theta);
-
-    _theta_sdirk2_btable_A(A, theta);
-    _theta_sdirk2_btable_b(B->b, theta);
-    _theta_sdirk2_btable_c(B->c, theta);
-    B->q = 1;
-    B->p = 1;
-  }
-  else if (content->order_coarse == 3)
-  {
-    if (guess) _theta_sdirk3_guess(theta);
-
-    _theta_sdirk3_btable_A(A, theta);
-    _theta_sdirk3_btable_b(B->b, theta);
-    _theta_sdirk3_btable_c(B->c, theta);
-    B->q = 2;
-    B->p = 2;
-  }
-  else
-  {
-    free(A);
-    if (guess) free(theta);
-    return SUNBRAID_ILLINPUT;
+    case 2:
+      if (guess) _theta_sdirk2_guess(theta);
+      _theta_sdirk2_btable_A(A, theta);
+      _theta_sdirk2_btable_b(B->b, theta);
+      _theta_sdirk2_btable_c(B->c, theta);
+      B->q = 1;
+      B->p = 1;
+      break;
+    case 3:
+      if (guess) _theta_sdirk3_guess(theta);
+      _theta_sdirk3_btable_A(A, theta);
+      _theta_sdirk3_btable_b(B->b, theta);
+      _theta_sdirk3_btable_c(B->c, theta);
+      B->q = 2;
+      B->p = 2;
+      break;
+    default:
+      free(A);
+      if (guess) free(theta);
+      return SUNBRAID_ILLINPUT;
   }
 
   for (int i=0; i<s; i++)
@@ -410,6 +408,9 @@ int ARKBraid_Free(braid_App *app)
       content->fine_btable = NULL;
     }
     _ARKBraid_FreeCGBtables(content);
+
+    ARKBraidNlsMem_Free(content->NLS_mem);
+    SUNNonlinSolFree(content->NLS);
 
     free((*app)->content);
     (*app)->content = NULL;
@@ -978,6 +979,12 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
     flag = _ARKBraid_AllocCGBtables(content, sstatus);
     if (flag != SUNBRAID_SUCCESS) return flag;
 
+    /* Setup nonlinear solver */
+    flag = ARKBraidNlsMem_Create(content, content->NLS_mem);
+    if (flag != SUNBRAID_SUCCESS) return flag;
+    flag = ARKBraidNlsSetup(content->ark_mem, content->NLS_mem, &content->NLS);
+    if (flag != SUNBRAID_SUCCESS) return flag;
+
     /* Turn on computation of coarse grid Butcher tables */
     if (nlevels > 1)
     {
@@ -987,7 +994,7 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
   }
 
   /* make sure this is still computed even when we skip the first downcycle */
-  if (content->flag_skip_downcycle && caller == braid_ASCaller_Drive_TopCycle && iter == 0)
+  if (caller == braid_ASCaller_Drive_TopCycle && iter == 0)
   {
     content->flag_refine_downcycle = SUNTRUE;
     printf("ARKBraid: Skipping first downcycle, but still computing coarse grid Butcher tables\n");
@@ -1048,7 +1055,7 @@ int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ptr)
   ARKBraidContent content = (ARKBraidContent) app->content;
   
   /* Allocate vdata */
-  flag = ARKBraid_InitVecData(content, vdata_ptr);
+  flag = ARKBraid_InitVecData(app, vdata_ptr);
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   vdata = (ARKBraidVecData) *vdata_ptr;
@@ -1127,10 +1134,136 @@ int ARKBraid_TakeStep(void *arkode_mem, realtype tstart, realtype tstop,
 
 
 
-/* ------------------------
- * Solve nonlinear systems
- * ------------------------ */
+/* ---------------------------------
+ * Solve dense nonlinear systems
+ * --------------------------------- */
 
+#define NLS_TOL RCONST(1.0e-10)  /* nonlinear solver tolerance */
+
+int ARKBraidNlsResidual(N_Vector thcor, N_Vector r, void *mem)
+{
+  ARKBraidNlsMem nlsmem;
+
+  /* Check inputs */
+  if (mem == NULL) return SUNBRAID_ILLINPUT;
+  nlsmem = (ARKBraidNlsMem) mem;
+
+  /* Update state using given correction */
+  N_VLinearSum(ONE, nlsmem->th0, ONE, thcor, nlsmem->thcur);
+
+  /* Compute residual */
+  nlsmem->res(NV_DATA_S(r), NV_DATA_S(nlsmem->thcur), NV_DATA_S(nlsmem->rhs));
+  
+  return SUNBRAID_SUCCESS;
+}
+
+
+/* Setup linear solve for Newton iteration */
+int ARKBraidNlsLSetup(booleantype jbad, booleantype *jcur, void *mem)
+{
+  int flag; /* return flag */
+  ARKBraidNlsMem nls_mem;
+
+  if (mem == NULL) return SUNBRAID_ILLINPUT;
+  nls_mem = (ARKBraidNlsMem) mem;
+
+  /* Compute Jacobian */
+  nls_mem->jac(SUNDenseMatrix_Data(nls_mem->J), NV_DATA_S(nls_mem->thcur));
+
+  /* Update Jacobian status */
+  *jcur = SUNTRUE;
+
+  /* setup linear solver */
+  flag = SUNLinSolSetup(nls_mem->LS, nls_mem->J);
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraidNlsLSolve(N_Vector b, void *mem)
+{
+  int flag; /* return flag */
+  ARKBraidNlsMem nls_mem;
+
+  if (mem == NULL) return SUNBRAID_ILLINPUT;
+  nls_mem = (ARKBraidNlsMem) mem;
+
+  /* solve linear system */
+  flag = SUNLinSolSolve(nls_mem->LS, nls_mem->J, nls_mem->x, b, ZERO);
+  N_VScale(ONE, nls_mem->x, b);
+
+  return flag;
+}
+
+
+int ARKBraidNlsConvTest(SUNNonlinearSolver NLS, N_Vector y, N_Vector del,
+                        realtype tol, N_Vector ewt, void *mem)
+{
+  realtype delnrm;
+
+  /* Compute the norm of the correction */
+  delnrm = N_VWrmsNorm(del, ewt);
+
+  if (delnrm <= tol) return SUN_NLS_SUCCESS;
+  else               return SUN_NLS_CONTINUE;
+}
+
+
+int ARKBraidNlsSetup(ARKodeMem ark_mem, ARKBraidNlsMem nls_mem, SUNNonlinearSolver *NLS_ptr)
+{
+  int flag; /* return flag */
+  SUNNonlinearSolver NLS; /* output, nonlinear solver object */
+
+  /* Check input */
+  if (ark_mem == NULL || nls_mem == NULL) return SUNBRAID_ILLINPUT;
+
+  NLS = SUNNonlinSol_Newton(nls_mem->th0, ark_mem->sunctx);
+  if (NLS == NULL) return SUNBRAID_MEMFAIL;
+
+  /* set residual/jacobian functions */
+  flag = SUNNonlinSolSetSysFn(NLS, ARKBraidNlsResidual);
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  flag = SUNNonlinSolSetLSetupFn(NLS, ARKBraidNlsLSetup);
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  flag = SUNNonlinSolSetLSolveFn(NLS, ARKBraidNlsLSolve);
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  flag = SUNNonlinSolSetConvTestFn(NLS, ARKBraidNlsConvTest, NULL);
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  /* Set the max iterations */
+  flag = SUNNonlinSolSetMaxIters(NLS, 100);
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  /* Set the nonlinear solver */
+  *NLS_ptr = NLS;
+
+  return SUNBRAID_SUCCESS;
+}
+
+
+/* Solve the nonlinear order conditions given rhs */
+int ARKBraidNlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem, realtype *rhs)
+{
+  int flag; /* return flag */
+
+  /* Check input */
+  if (NLS == NULL || nls_mem == NULL || rhs == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Set right hand side */
+  for (int i=0; i<nls_mem->nconds; i++)
+    NV_Ith_S(nls_mem->rhs, i) = rhs[i];
+
+  /* Solve nonlinear system */
+  flag = SUNNonlinSolSolve(NLS, nls_mem->th0, nls_mem->thcor, nls_mem->weight, NLS_TOL, SUNTRUE, nls_mem); 
+  if (flag != SUN_NLS_SUCCESS) return flag;
+
+  /* Copy solution to output */
+  N_VLinearSum(ONE, nls_mem->th0, ONE, nls_mem->thcor, nls_mem->thcur);
+
+  return SUNBRAID_SUCCESS;
+}
 
 int ARKBraidNlsMem_Create(ARKBraidContent content, ARKBraidNlsMem *nlsmem)
 {
@@ -1145,8 +1278,7 @@ int ARKBraidNlsMem_Create(ARKBraidContent content, ARKBraidNlsMem *nlsmem)
     return SUNBRAID_MEMFAIL;
 
   /* Access content */
-  ARKodeMem ark_mem = (ARKodeMem) content->ark_mem;
-  SUNContext sunctx = (SUNContext) ark_mem->sunctx;
+  SUNContext sunctx = (SUNContext) content->ark_mem->sunctx;
   nc = content->num_order_conditions;
 
   /* Allocate memory */
@@ -1154,25 +1286,68 @@ int ARKBraidNlsMem_Create(ARKBraidContent content, ARKBraidNlsMem *nlsmem)
   mem = (ARKBraidNlsMem) malloc(sizeof(struct _ARKBraidNlsMem));
   if (mem == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->y0 = N_VNew_Serial(nc, sunctx);
-  if (mem->y0 == NULL) return SUNBRAID_ALLOCFAIL;
+  mem->nconds = nc;
+  mem->order  = content->order_coarse;
+  mem->rhs = NULL;
+  mem->th0 = NULL;
+  mem->thcur = NULL;
+  mem->thcor = NULL;
+  mem->weight = NULL;
+  mem->x = NULL;
+  mem->J = NULL;
+  mem->LS = NULL;
 
-  mem->ycur = N_VClone_Serial(mem->y0);
-  if (mem->ycur == NULL) return SUNBRAID_ALLOCFAIL;
+  /* Create vectors and matrices */
+  mem->th0 = N_VNew_Serial(nc, sunctx);
+  if (mem->th0 == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->ycor = N_VClone_Serial(mem->y0);
-  if (mem->ycor == NULL) return SUNBRAID_ALLOCFAIL;
+  mem->rhs = N_VClone_Serial(mem->th0);
+  if (mem->rhs == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->w = N_VClone_Serial(mem->y0);
-  if (mem->w == NULL) return SUNBRAID_ALLOCFAIL;
+  mem->thcur = N_VClone_Serial(mem->th0);
+  if (mem->thcur == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->x = N_VClone_Serial(mem->y0);
+  mem->thcor = N_VClone_Serial(mem->th0);
+  if (mem->thcor == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->weight = N_VClone_Serial(mem->th0);
+  if (mem->weight == NULL) return SUNBRAID_ALLOCFAIL;
+
+  mem->x = N_VClone_Serial(mem->th0);
   if (mem->x == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->A = SUNDenseMatrix(nc, nc, sunctx);
-  if (mem->A == NULL) return SUNBRAID_ALLOCFAIL;
+  mem->J = SUNDenseMatrix(nc, nc, sunctx);
+  if (mem->J == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->LS = SUNLinSol_Dense(mem->y0, mem->A, sunctx);
+  mem->LS = SUNLinSol_Dense(mem->th0, mem->J, sunctx);
+  if (mem->LS == NULL) return SUNBRAID_ALLOCFAIL;
+
+  flag = SUNLinSolInitialize(mem->LS);
+  if (flag != SUNLS_SUCCESS) return SUNBRAID_SUNFAIL;
+
+  /* Attach residual/jacobian functions and set initial guess */
+  switch (content->order_coarse)
+  {
+  case 2:
+    mem->res = _theta_sdirk2_lhs;
+    mem->jac = _theta_sdirk2_lhs_jac;
+    _theta_sdirk2_guess(NV_DATA_S(mem->th0));
+    break;
+  case 3:
+    mem->res = _theta_sdirk3_lhs;
+    mem->jac = _theta_sdirk3_lhs_jac;
+    _theta_sdirk3_guess(NV_DATA_S(mem->th0));
+    break;
+  default:
+    return SUNBRAID_ILLINPUT;
+  }
+
+  /* Set norm weights */
+  for (int i=0; i<nc; i++)
+    NV_Ith_S(mem->weight,i) = ONE;
+
+  /* Create linear solver */
+  mem->LS = SUNLinSol_Dense(mem->th0, mem->J, sunctx);
   if (mem->LS == NULL) return SUNBRAID_ALLOCFAIL;
 
   flag = SUNLinSolInitialize(mem->LS);
@@ -1188,12 +1363,13 @@ int ARKBraidNlsMem_Free(ARKBraidNlsMem nlsmem)
 {
   if (nlsmem == NULL) return SUNBRAID_SUCCESS;
 
-  N_VDestroy_Serial(nlsmem->y0);
-  N_VDestroy_Serial(nlsmem->ycur);
-  N_VDestroy_Serial(nlsmem->ycor);
-  N_VDestroy_Serial(nlsmem->w);
+  N_VDestroy_Serial(nlsmem->rhs);
+  N_VDestroy_Serial(nlsmem->th0);
+  N_VDestroy_Serial(nlsmem->thcur);
+  N_VDestroy_Serial(nlsmem->thcor);
+  N_VDestroy_Serial(nlsmem->weight);
   N_VDestroy_Serial(nlsmem->x);
-  SUNMatDestroy(nlsmem->A);
+  SUNMatDestroy(nlsmem->J);
   SUNLinSolFree(nlsmem->LS);
 
   free(nlsmem);
@@ -1201,3 +1377,4 @@ int ARKBraidNlsMem_Free(ARKBraidNlsMem nlsmem)
 
   return SUNBRAID_SUCCESS;
 }
+

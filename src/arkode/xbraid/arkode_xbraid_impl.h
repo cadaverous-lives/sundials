@@ -55,18 +55,21 @@ extern "C" {
  * ------------------------ */
 
 
-/* Define ARKBraidNlsData, which should 
- * serve as a proxy to the integrator memory
- */
+/* Define ARKBraidNlsData, stores nonlinear solver data */
 struct _ARKBraidNlsMem
 {
-  N_Vector y0;
-  N_Vector ycur;
-  N_Vector ycor;
-  N_Vector w;
+  int      order;
+  int      nconds;
+  N_Vector rhs;
+  N_Vector th0;
+  N_Vector thcur;
+  N_Vector thcor;
+  N_Vector weight;
   N_Vector x;
-  SUNMatrix A;
+  SUNMatrix J;
   SUNLinearSolver LS;
+  void (*res)(sunrealtype *r, const realtype *th, const realtype *rhs);
+  void (*jac)(sunrealtype *J, const realtype *th);
 };
 
 typedef struct _ARKBraidNlsMem *ARKBraidNlsMem;
