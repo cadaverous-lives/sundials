@@ -21,6 +21,7 @@ install(CODE "MESSAGE(\"\nInstall ARKODE XBraid interface\n\")")
 sundials_add_library(sundials_arkode_xbraid
   SOURCES
     arkode_xbraid.c
+    arkode_xbraid_theta.c
     ${SUNDIALS_SOURCE_DIR}/src/sundials/sundials_xbraid.c
   HEADERS
     ${SUNDIALS_SOURCE_DIR}/include/arkode/arkode_xbraid.h

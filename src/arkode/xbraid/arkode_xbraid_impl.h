@@ -132,8 +132,8 @@ typedef struct _ARKBraidContent *ARKBraidContent;
  * --------------------- */
 
 
-/* Define ARKBraidVecData content */
-struct _ARKBraidVecData
+/* Define ARKBraidThetaVecData content */
+struct _ARKBraidThetaVecData
 {
   /* Store time value at previous C-point */
   realtype tprior;
@@ -145,10 +145,62 @@ struct _ARKBraidVecData
   realtype *Phi;
 };
 
-typedef struct _ARKBraidVecData *ARKBraidVecData;
+typedef struct _ARKBraidThetaVecData *ARKBraidThetaVecData;
 
 
+/* ---------------------
+ * AKBraidTheta
+ * --------------------- */
 
+
+booleantype _ARKBraid_IsCPoint(int tindex, int cfactor);
+
+int _ARKBraidTheta_GetNumOrderConditions(int fine_order, int coarse_order);
+
+int ARKBraidTheta_InitVecData(braid_App app, void** vdata_ptr);
+
+int ARKBraidTheta_FreeVecData(braid_App app, void* vdata_ptr);
+
+int ARKBraidTheta_GetBufSize(braid_App app, braid_Int* size_ptr);
+
+int ARKBraidTheta_BufPack(braid_App app, void* buffer, void* vdata_ptr);
+
+int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr);
+
+int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus);
+
+int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
+                                  braid_StepStatus status, braid_Vector u);
+
+int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
+                             realtype* theta);
+
+int _ARKBraidTheta_GetBTable(ARKBraidContent content, braid_StepStatus status,
+                             braid_Int level, braid_Int ti, ARKodeButcherTable* B);
+
+static int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
+                                         braid_SyncStatus sstatus);
+
+static int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content);
+
+int ARKBraidTheta_NlsResidual(N_Vector thcor, N_Vector r, void* mem);
+
+int ARKBraidTheta_NlsLSetup(booleantype jbad, booleantype* jcur, void* mem);
+
+int ARKBraidTheta_NlsLSolve(N_Vector b, void* mem);
+
+int ARKBraidTheta_NlsConvTest(SUNNonlinearSolver NLS, N_Vector y, N_Vector del,
+                              realtype tol, N_Vector ewt, void* mem);
+
+int ARKBraidTheta_NlsSetup(ARKodeMem ark_mem, ARKBraidNlsMem nls_mem,
+                           SUNNonlinearSolver* NLS_ptr);
+
+int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
+                           realtype* rhs);
+
+int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem);
+
+int ARKBraidTheta_NlsMem_Free(ARKBraidNlsMem nlsmem);
 
 #ifdef __cplusplus
 }

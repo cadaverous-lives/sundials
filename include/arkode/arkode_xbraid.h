@@ -92,21 +92,21 @@ SUNDIALS_EXPORT int ARKBraid_Init(braid_App app, realtype t,
 SUNDIALS_EXPORT int ARKBraid_Access(braid_App app, braid_Vector u,
                                     braid_AccessStatus astatus);
 
-SUNDIALS_EXPORT int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus);
+SUNDIALS_EXPORT int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus);
 
 // 2. Add ARKODE implementations of these functions (declare in include/arkode/arkode_xbraid.h and define in src/arkode/arkode_xbraid.c):
 /* return the buffer space needed, this will get added to the buffer space needed for the vector data in SUNBraidVector_BufSize */
-SUNDIALS_EXPORT int ARKBraid_GetBufSize(braid_App app, braid_Int *size_ptr);
+SUNDIALS_EXPORT int ARKBraidTheta_GetBufSize(braid_App app, braid_Int *size_ptr);
  
 /* pack/unpack data in/out of the buffer, SUNBraidVector_BufPack will offset the input pointer past the vector data */
-SUNDIALS_EXPORT int ARKBraid_BufPack(braid_App app, void *buffer, void *vdata_ptr);
-SUNDIALS_EXPORT int ARKBraid_BufUnpack(braid_App app, void *buffer, void **vdata_ref);
+SUNDIALS_EXPORT int ARKBraidTheta_BufPack(braid_App app, void *buffer, void *vdata_ptr);
+SUNDIALS_EXPORT int ARKBraidTheta_BufUnpack(braid_App app, void *buffer, void **vdata_ref);
 
 /* initialize the vector data */
-SUNDIALS_EXPORT int ARKBraid_InitVecData(braid_App app, void **vdata_ptr);
+SUNDIALS_EXPORT int ARKBraidTheta_InitVecData(braid_App app, void **vdata_ptr);
 
 /* free the vector data */
-SUNDIALS_EXPORT int ARKBraid_FreeVecData(braid_App app, void *vdata_ptr);
+SUNDIALS_EXPORT int ARKBraidTheta_FreeVecData(braid_App app, void *vdata_ptr);
 
 
 /* -----------------
