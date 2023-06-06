@@ -3,12 +3,12 @@
 #include <sundials/sundials_types.h>
 #include <sundials/sundials_math.h>
 
-void _theta_esdirk2_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
+void _theta_esdirk2_res(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
 {
   phi[0] = RCONST(-1.0) * rhs[0] + th[0];
 }
 
-void _theta_esdirk2_lhs_jac(sunrealtype* phi_J, const sunrealtype* th)
+void _theta_esdirk2_jac(sunrealtype* phi_J, const sunrealtype* th)
 {
   phi_J[0] = RCONST(1.0);
 }
@@ -40,12 +40,12 @@ void _theta_esdirk2_guess(sunrealtype* guess)
 
 /* theta_sdirk2 */
 
-void _theta_sdirk2_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
+void _theta_sdirk2_res(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
 {
   phi[0] = RCONST(-1.0) * SUNRpowerI(th[0], 2) + RCONST(-1.0) * rhs[0] + RCONST(2.0) * th[0];
 }
 
-void _theta_sdirk2_lhs_jac(sunrealtype* phi_J, const sunrealtype* th)
+void _theta_sdirk2_jac(sunrealtype* phi_J, const sunrealtype* th)
 {
   phi_J[0] = RCONST(2.0) + RCONST(-2.0) * th[0];
 }
@@ -77,23 +77,23 @@ void _theta_sdirk2_guess(sunrealtype* guess)
 
 /* theta_esdirk3 */
 
-void _theta_esdirk3_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
+void _theta_esdirk3_res(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
 {
   phi[0] = RCONST(-1.0) * rhs[0] + RCONST(-1.0) * th[0] * th[1] + RCONST(-1.0) * th[1] * th[2] + th[0] + th[1];
   phi[1] = RCONST(-1.0) * rhs[1] + SUNRpowerI(th[1], 2) + RCONST(-1.0) * SUNRpowerI(th[1], 2) * th[0] + RCONST(-1.0) * SUNRpowerI(th[1], 2) * th[2] + th[0];
   phi[2] = RCONST(-1.0) * rhs[2] + SUNRpowerI(th[0], 2) + RCONST(-2.0) * SUNRpowerI(th[0], 2) * th[1] + RCONST(2.0) * th[0] * th[1] + RCONST(-2.0) * th[0] * th[1] * th[2];
 }
 
-void _theta_esdirk3_lhs_jac(sunrealtype* phi_J, const sunrealtype* th)
+void _theta_esdirk3_jac(sunrealtype* phi_J, const sunrealtype* th)
 {
   phi_J[0] = RCONST(1.0) + RCONST(-1.0) * th[1];
-  phi_J[1] = RCONST(1.0) + RCONST(-1.0) * th[0] + RCONST(-1.0) * th[2];
-  phi_J[2] = RCONST(-1.0) * th[1];
-  phi_J[3] = RCONST(1.0) + RCONST(-1.0) * SUNRpowerI(th[1], 2);
+  phi_J[1] = RCONST(1.0) + RCONST(-1.0) * SUNRpowerI(th[1], 2);
+  phi_J[2] = RCONST(2.0) * th[0] + RCONST(2.0) * th[1] + RCONST(-4.0) * th[0] * th[1] + RCONST(-2.0) * th[1] * th[2];
+  phi_J[3] = RCONST(1.0) + RCONST(-1.0) * th[0] + RCONST(-1.0) * th[2];
   phi_J[4] = RCONST(2.0) * th[1] + RCONST(-2.0) * th[0] * th[1] + RCONST(-2.0) * th[1] * th[2];
-  phi_J[5] = RCONST(-1.0) * SUNRpowerI(th[1], 2);
-  phi_J[6] = RCONST(2.0) * th[0] + RCONST(2.0) * th[1] + RCONST(-4.0) * th[0] * th[1] + RCONST(-2.0) * th[1] * th[2];
-  phi_J[7] = RCONST(-2.0) * SUNRpowerI(th[0], 2) + RCONST(2.0) * th[0] + RCONST(-2.0) * th[0] * th[2];
+  phi_J[5] = RCONST(-2.0) * SUNRpowerI(th[0], 2) + RCONST(2.0) * th[0] + RCONST(-2.0) * th[0] * th[2];
+  phi_J[6] = RCONST(-1.0) * th[1];
+  phi_J[7] = RCONST(-1.0) * SUNRpowerI(th[1], 2);
   phi_J[8] = RCONST(-2.0) * th[0] * th[1];
 }
 
@@ -133,23 +133,23 @@ void _theta_esdirk3_guess(sunrealtype* guess)
 
 /* theta_sdirk3 */
 
-void _theta_sdirk3_lhs(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
+void _theta_sdirk3_res(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)
 {
   phi[0] = RCONST(-1.0) * SUNRpowerI(th[0], 2) + RCONST(-1.0) * rhs[0] + RCONST(2.0) * th[0] + th[1] * th[2] + RCONST(-1.0) * th[0] * th[2];
   phi[1] = RCONST(-1.0) * SUNRpowerI(th[0], 3) + RCONST(-1.0) * rhs[1] + SUNRpowerI(th[1], 2) * th[2] + SUNRpowerI(th[0], 2) + RCONST(-1.0) * SUNRpowerI(th[0], 2) * th[2] + th[0];
   phi[2] = RCONST(-2.0) * SUNRpowerI(th[0], 3) + RCONST(-1.0) * rhs[2] + RCONST(3.0) * SUNRpowerI(th[0], 2) + RCONST(-3.0) * SUNRpowerI(th[0], 2) * th[2] + RCONST(3.0) * th[0] * th[1] * th[2];
 }
 
-void _theta_sdirk3_lhs_jac(sunrealtype* phi_J, const sunrealtype* th)
+void _theta_sdirk3_jac(sunrealtype* phi_J, const sunrealtype* th)
 {
   phi_J[0] = RCONST(2.0) + RCONST(-1.0) * th[2] + RCONST(-2.0) * th[0];
-  phi_J[1] = th[2];
-  phi_J[2] = RCONST(-1.0) * th[0] + th[1];
-  phi_J[3] = RCONST(1.0) + RCONST(2.0) * th[0] + RCONST(-3.0) * SUNRpowerI(th[0], 2) + RCONST(-2.0) * th[0] * th[2];
+  phi_J[1] = RCONST(1.0) + RCONST(2.0) * th[0] + RCONST(-3.0) * SUNRpowerI(th[0], 2) + RCONST(-2.0) * th[0] * th[2];
+  phi_J[2] = RCONST(-6.0) * SUNRpowerI(th[0], 2) + RCONST(6.0) * th[0] + RCONST(-6.0) * th[0] * th[2] + RCONST(3.0) * th[1] * th[2];
+  phi_J[3] = th[2];
   phi_J[4] = RCONST(2.0) * th[1] * th[2];
-  phi_J[5] = RCONST(-1.0) * SUNRpowerI(th[0], 2) + SUNRpowerI(th[1], 2);
-  phi_J[6] = RCONST(-6.0) * SUNRpowerI(th[0], 2) + RCONST(6.0) * th[0] + RCONST(-6.0) * th[0] * th[2] + RCONST(3.0) * th[1] * th[2];
-  phi_J[7] = RCONST(3.0) * th[0] * th[2];
+  phi_J[5] = RCONST(3.0) * th[0] * th[2];
+  phi_J[6] = RCONST(-1.0) * th[0] + th[1];
+  phi_J[7] = RCONST(-1.0) * SUNRpowerI(th[0], 2) + SUNRpowerI(th[1], 2);
   phi_J[8] = RCONST(-3.0) * SUNRpowerI(th[0], 2) + RCONST(3.0) * th[0] * th[1];
 }
 
