@@ -50,6 +50,102 @@ int _ARKBraidTheta_GetNumOrderConditions(int fine_order, int coarse_order)
   return num_order_conditions;
 }
 
+int _ARKBraidTheta_CloneARKodeMem(braid_App app, ARKodeMem ark_mem,
+                                  ARKodeMem* ark_mem_clone)
+{
+  int flag;
+  N_Vector ytmp;
+  ARKodeARKStepMem step_mem, step_mem_new;
+  ARKodeMem ark_mem_new = NULL;
+
+  /* Check input */
+  if (ark_mem == NULL || ark_mem->step_mem == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Get template vector */
+  ARKBraid_GetVecTmpl(app, &ytmp);
+
+  /* Create new ARKodeMem */
+  ark_mem_new = ARKStepCreate(step_mem->fe, step_mem->fi, 0., ytmp,
+                              ark_mem->sunctx);
+
+  /* Copy ops */
+  ark_mem_new->step_attachlinsol   = ark_mem->step_attachlinsol;
+  ark_mem_new->step_attachmasssol  = ark_mem->step_attachmasssol;
+  ark_mem_new->step_disablelsetup  = ark_mem->step_disablelsetup;
+  ark_mem_new->step_disablemsetup  = ark_mem->step_disablemsetup;
+  ark_mem_new->step_getlinmem      = ark_mem->step_getlinmem;
+  ark_mem_new->step_getmassmem     = ark_mem->step_getmassmem;
+  ark_mem_new->step_getimplicitrhs = ark_mem->step_getimplicitrhs;
+  ark_mem_new->step_mmult          = ark_mem->step_mmult;
+  ark_mem_new->step_getgammas      = ark_mem->step_getgammas;
+  ark_mem_new->step_init           = ark_mem->step_init;
+  ark_mem_new->step_fullrhs        = ark_mem->step_fullrhs;
+  ark_mem_new->step                = ark_mem->step;
+
+  /* Copy over settings */
+  ark_mem_new->user_data = ark_mem->user_data;
+  ark_mem_new->itol      = ark_mem->itol;
+  ark_mem_new->ritol     = ark_mem->ritol;
+  ark_mem_new->reltol    = ark_mem->reltol;
+  ark_mem_new->Sabstol   = ark_mem->Sabstol;
+  if (ark_mem->Vabstol != NULL)
+    ark_mem_new->Vabstol = N_VClone(ark_mem->Vabstol);
+  ark_mem_new->atolmin0 = ark_mem->atolmin0;
+  ark_mem_new->SRabstol = ark_mem->SRabstol;
+  if (ark_mem->VRabstol != NULL)
+    ark_mem_new->VRabstol = N_VClone(ark_mem->VRabstol);
+  ark_mem_new->Ratolmin0      = ark_mem->Ratolmin0;
+  ark_mem_new->user_efun      = ark_mem->user_efun;
+  ark_mem_new->efun           = ark_mem->efun;
+  ark_mem_new->e_data         = ark_mem->e_data;
+  ark_mem_new->user_rfun      = ark_mem->user_rfun;
+  ark_mem_new->rfun           = ark_mem->rfun;
+  ark_mem_new->r_data         = ark_mem->r_data;
+  ark_mem_new->constraintsSet = ark_mem->constraintsSet;
+  if (ark_mem->constraints != NULL)
+    ark_mem_new->constraints = N_VClone(ark_mem->constraints);
+
+  ark_mem_new->mxstep         = ark_mem->mxstep;
+  ark_mem_new->mxhnil         = ark_mem->mxhnil;
+  ark_mem_new->maxconstrfails = ark_mem->maxconstrfails;
+  ark_mem_new->maxnef         = ark_mem->maxnef;
+  ark_mem_new->maxncf         = ark_mem->maxncf;
+
+  ark_mem_new->report = ark_mem->report;
+  ark_mem_new->diagfp = ark_mem->diagfp;
+
+  ark_mem_new->ProcessStep  = ark_mem->ProcessStep;
+  ark_mem_new->ps_data      = ark_mem->ps_data;
+  ark_mem_new->ProcessStage = ark_mem->ProcessStage;
+
+  /* Copy step_mem */
+  step_mem     = (ARKodeARKStepMem)ark_mem->step_mem;
+  step_mem_new = (ARKodeARKStepMem)ark_mem_new->step_mem;
+
+  /* Linear Solver Data */
+  step_mem_new->linit       = step_mem->linit;
+  step_mem_new->lsetup      = step_mem->lsetup;
+  step_mem_new->lsolve      = step_mem->lsolve;
+  step_mem_new->lfree       = step_mem->lfree;
+  step_mem_new->lmem        = step_mem->lmem;
+  step_mem_new->lsolve_type = step_mem->lsolve_type;
+
+  /* Mass matrix solver data */
+  step_mem_new->minit       = step_mem->minit;
+  step_mem_new->msetup      = step_mem->msetup;
+  step_mem_new->mmult       = step_mem->mmult;
+  step_mem_new->msolve      = step_mem->msolve;
+  step_mem_new->mfree       = step_mem->mfree;
+  step_mem_new->mass_mem    = step_mem->mass_mem;
+  step_mem_new->mass_type   = step_mem->mass_type;
+  step_mem_new->msolve_type = step_mem->msolve_type;
+
+  /* Set output pointer */
+  *ark_mem_clone = ark_mem_new;
+
+  return SUNBRAID_SUCCESS;
+}
+
 /*-------------------------------------
  * VecData structure
  *-------------------------------------*/
@@ -203,6 +299,7 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
   ARKodeARKStepMem step_mem; /* ARKStep memory */
 
   /* Check input */
+
   if (app == NULL || sstatus == NULL) return SUNBRAID_ILLINPUT;
 
   /* Access app content */
@@ -211,6 +308,20 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
   /* Need to store the fine-grid butcher table */
   if (content->fine_btable == NULL)
   {
+    // ARKodeButcherTable B;
+    // /* Get default coarse btable */
+    // B = ARKodeButcherTable_Alloc(content->order_coarse, &B);
+    // if (B == NULL) return SUNBRAID_ALLOCFAIL;
+    // flag = _ARKBraidTheta_SetBtable(B, content, NULL);
+    // if (flag != SUNBRAID_SUCCESS) return flag;
+
+    /* Trick ARKODE into allocating enough memory for the coarse method */
+    // flag = ARKStepSetTables(content->ark_mem, content->order_coarse,
+    //                         content->order_coarse, B, NULL);
+    // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+    // flag = arkInitialSetup(content->ark_mem, ONE);
+    // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
     /* Initialize arkode_mem so that there is a valid Butcher table */
     flag = arkStep_SetButcherTables(content->ark_mem);
     CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
@@ -224,10 +335,24 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
     else if (step_mem->Bi != NULL)
       content->fine_btable = ARKodeButcherTable_Copy(step_mem->Bi);
     else return SUNBRAID_ILLINPUT;
+
+    // ARKodeButcherTable_Free(B);
   }
 
   /* Check that theta method needs computing */
   if (content->order_fine >= content->order_coarse) return SUNBRAID_SUCCESS;
+
+  // /* Create the coarse grid ARKodeMem */
+  // flag = _ARKBraidTheta_CloneARKodeMem(app, content->ark_mem,
+  // &content->ark_mem_coarse); if (flag != SUNBRAID_SUCCESS) return flag;
+
+  // /* Set the coarse grid to always use implicit methods */
+  // flag = ARKStepSetImplicit(content->ark_mem_coarse);
+  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
+  // /* Set coarse grid to not use temporal adaptivity? */
+  // flag = ARKStepSetFixedStep((void*)content->ark_mem_coarse, RCONST(0.1));
+  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Get information from XBraid status */
   flag = braid_SyncStatusGetCallingFunction(sstatus, &caller);
@@ -265,12 +390,13 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
   }
 
   /* make sure this is still computed even when we skip the first downcycle */
-  if (caller == braid_ASCaller_Drive_TopCycle && iter == 0)
-  {
-    content->flag_refine_downcycle = SUNTRUE;
-    printf("ARKBraid: Skipping first downcycle, but still computing coarse "
-           "grid Butcher tables\n");
-  }
+  /* TODO: implement this correctly */
+  // if (caller == braid_ASCaller_Drive_TopCycle && iter == 0)
+  // {
+  //   content->flag_refine_downcycle = SUNTRUE;
+  //   printf("ARKBraid: Skipping first downcycle, but still computing coarse "
+  //          "grid Butcher tables\n");
+  // }
 
   return SUNBRAID_SUCCESS;
 }
@@ -407,7 +533,7 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       tic = ti / cfactor - il;
 
       _ARKBraidTheta_SetBtable(content->coarse_btables[level + 1][tic], content,
-                              NV_DATA_S(content->NLS_mem->thcur));
+                               NV_DATA_S(content->NLS_mem->thcur));
     }
 
     free(phi_step);
@@ -418,6 +544,7 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
   // if (app->explicit && level == 0)
   //   flag = ARKStepSetTables(ark_mem, B->q, B->p, NULL, B);
   // else
+  // flag = ARKStepSetTables(content->ark_mem_coarse, B->q, B->p, B, NULL);
   flag = ARKStepSetTables(content->ark_mem, B->q, B->p, B, NULL);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
@@ -457,6 +584,7 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
   }
 
   /* Set Butcher table */
+  /* TODO: store the guess and btable functions in the content struct? */
   switch (content->order_coarse)
   {
   case 2:
@@ -468,10 +596,10 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
     B->p = 1;
     break;
   case 3:
-    if (guess) _theta_esdirk3_guess(theta);
-    _theta_esdirk3_btable_A(A, theta);
-    _theta_esdirk3_btable_b(B->b, theta);
-    _theta_esdirk3_btable_c(B->c, theta);
+    if (guess) _theta_sdirk3_guess(theta);
+    _theta_sdirk3_btable_A(A, theta);
+    _theta_sdirk3_btable_b(B->b, theta);
+    _theta_sdirk3_btable_c(B->c, theta);
     B->q = 2;
     B->p = 2;
     break;
@@ -583,7 +711,7 @@ int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content)
 {
   if (content->coarse_btables != NULL)
   {
-    for (int level = 0; level < content->num_levels; level++)
+    for (int level = 1; level < content->num_levels; level++)
     {
       for (int table = 0; table < content->num_tables[level]; table++)
       {
@@ -593,8 +721,8 @@ int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content)
       free(content->coarse_btables[level]);
       content->coarse_btables[level] = NULL;
     }
-    free(content->num_tables);
-    free(content->coarse_btables);
+    free(content->num_tables+1);
+    free(content->coarse_btables+1);
     content->num_tables     = NULL;
     content->coarse_btables = NULL;
   }
@@ -723,7 +851,8 @@ int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
   /* Solve nonlinear system */
   flag = SUNNonlinSolSolve(NLS, nls_mem->th0, nls_mem->thcor, nls_mem->weight,
                            NLS_TOL, SUNTRUE, nls_mem);
-  if (flag != SUN_NLS_SUCCESS) return flag;
+  if (flag != SUN_NLS_SUCCESS) printf("NLS failed with flag %d\n", flag);
+  return flag;
 
   /* Copy solution to output */
   N_VLinearSum(ONE, nls_mem->th0, ONE, nls_mem->thcor, nls_mem->thcur);
@@ -795,16 +924,16 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
   switch (content->order_coarse)
   {
   case 2:
-    mem->res = _theta_sdirk2_lhs;
-    mem->jac = _theta_sdirk2_lhs_jac;
+    mem->res = _theta_sdirk2_res;
+    mem->jac = _theta_sdirk2_jac;
     _theta_sdirk2_guess(NV_DATA_S(mem->th0));
     _theta_sdirk2_guess(NV_DATA_S(mem->thcur));
     break;
   case 3:
-    mem->res = _theta_esdirk3_lhs;
-    mem->jac = _theta_esdirk3_lhs_jac;
-    _theta_esdirk3_guess(NV_DATA_S(mem->th0));
-    _theta_esdirk3_guess(NV_DATA_S(mem->thcur));
+    mem->res = _theta_sdirk3_res;
+    mem->jac = _theta_sdirk3_jac;
+    _theta_sdirk3_guess(NV_DATA_S(mem->th0));
+    _theta_sdirk3_guess(NV_DATA_S(mem->thcur));
     break;
   default: return SUNBRAID_ILLINPUT;
   }

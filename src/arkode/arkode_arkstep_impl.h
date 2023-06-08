@@ -84,6 +84,7 @@ typedef struct ARKodeARKStepMemRec {
   int p;                  /* embedding order            */
   int istage;             /* current stage              */
   int stages;             /* number of stages           */
+  int stages_allocated;   /* number of stages allocated */
   ARKodeButcherTable Be;  /* ERK Butcher table          */
   ARKodeButcherTable Bi;  /* IRK Butcher table          */
 

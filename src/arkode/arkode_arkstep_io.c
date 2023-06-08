@@ -919,6 +919,71 @@ int ARKStepSetTables(void *arkode_mem, int q, int p,
   ark_mem->liw += Bliw;
   ark_mem->lrw += Blrw;
 
+  if (step_mem->stages_allocated != 0 && step_mem->stages_allocated < step_mem->stages) {
+    int j;
+
+    /*   Reallocate Fe[0] ... Fe[stages-1] if needed */
+    if (step_mem->explicit) {
+      if (step_mem->Fe != NULL)
+        step_mem->Fe = (N_Vector *) realloc(step_mem->Fe, step_mem->stages * sizeof(N_Vector));
+      for (j=step_mem->stages_allocated; j<step_mem->stages; j++) {
+        step_mem->Fe[j] = NULL;
+        if (!arkAllocVec(ark_mem, ark_mem->ewt, &(step_mem->Fe[j])))
+          return(ARK_MEM_FAIL);
+      }
+      ark_mem->liw += step_mem->stages - step_mem->stages_allocated;  /* pointers */
+    }
+
+    /*   Reallocate Fi[0] ... Fi[stages-1] if needed */
+    if (step_mem->implicit) {
+      if (step_mem->Fi != NULL)
+        step_mem->Fi = (N_Vector *) realloc(step_mem->Fi, step_mem->stages * sizeof(N_Vector));
+      for (j=step_mem->stages_allocated; j<step_mem->stages; j++) {
+        step_mem->Fi[j] = NULL;
+        if (!arkAllocVec(ark_mem, ark_mem->ewt, &(step_mem->Fi[j])))
+          return(ARK_MEM_FAIL);
+      }
+      ark_mem->liw += step_mem->stages - step_mem->stages_allocated;  /* pointers */
+    }
+
+    /* reallocate reusable arrays for fused vector operations */
+    int nfusedopvecs = 2 * step_mem->stages + 2 + step_mem->nforcing;
+    if (step_mem->cvals != NULL) {
+      step_mem->cvals = (realtype *) realloc(step_mem->cvals, step_mem->nfusedopvecs * sizeof(realtype));
+      if (step_mem->cvals == NULL)  return(ARK_MEM_FAIL);
+      for (j=step_mem->nfusedopvecs; j<nfusedopvecs; j++)
+        step_mem->cvals[j] = ZERO;
+      ark_mem->lrw += nfusedopvecs - step_mem->nfusedopvecs;
+    }
+    if (step_mem->Xvecs != NULL) {
+      step_mem->Xvecs = (N_Vector *) calloc(step_mem->nfusedopvecs,
+                                            sizeof(N_Vector));
+      if (step_mem->Xvecs == NULL)  return(ARK_MEM_FAIL);
+      for (j=step_mem->nfusedopvecs; j<nfusedopvecs; j++)
+        step_mem->Xvecs[j] = NULL;
+      ark_mem->liw += nfusedopvecs - step_mem->nfusedopvecs;
+    }
+
+    step_mem->stages_allocated = step_mem->stages;
+    step_mem->nfusedopvecs = nfusedopvecs;
+  }
+
+    // /* Allocate reusable arrays for fused vector operations */
+    // step_mem->nfusedopvecs = 2 * step_mem->stages + 2 + step_mem->nforcing;
+    // if (step_mem->cvals == NULL) {
+    //   step_mem->cvals = (realtype *) calloc(step_mem->nfusedopvecs,
+    //                                         sizeof(realtype));
+    //   if (step_mem->cvals == NULL)  return(ARK_MEM_FAIL);
+    //   ark_mem->lrw += step_mem->nfusedopvecs;
+    // }
+    // if (step_mem->Xvecs == NULL) {
+    //   step_mem->Xvecs = (N_Vector *) calloc(step_mem->nfusedopvecs,
+    //                                         sizeof(N_Vector));
+    //   if (step_mem->Xvecs == NULL)  return(ARK_MEM_FAIL);
+    //   ark_mem->liw += step_mem->nfusedopvecs;   /* pointers */
+    // }
+
+
   return(ARK_SUCCESS);
 }
 

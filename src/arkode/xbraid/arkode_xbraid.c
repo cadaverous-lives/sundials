@@ -15,14 +15,13 @@
  * -------------------------------------------------------------------------- */
 
 #include "arkode/arkode_xbraid.h"
+
 #include "arkode/arkode.h"
 #include "arkode_arkstep_impl.h"
 #include "arkode_xbraid_impl.h"
-
 #include "sundials/sundials_math.h"
 
 #define ONE RCONST(1.0)
-
 
 /* -------------------------------
  * Construct, initialize, and free
@@ -92,8 +91,10 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
   content->order_coarse = step_mem->q;
 
   content->num_order_conditions =
-    _ARKBraidTheta_GetNumOrderConditions(content->order_fine, content->order_coarse);
+    _ARKBraidTheta_GetNumOrderConditions(content->order_fine,
+                                         content->order_coarse);
 
+  content->ark_mem_coarse = NULL;
   content->num_levels     = 0;
   content->num_tables     = NULL;
   content->coarse_btables = NULL;
@@ -156,6 +157,12 @@ int ARKBraid_Free(braid_App* app)
       content->yout = NULL;
     }
 
+    if (content->ark_mem_coarse != NULL)
+    {
+      ARKStepFree((void**)&content->ark_mem_coarse); // Free integrator memory
+      content->ark_mem_coarse = NULL;
+    }
+
     if (content->fine_btable != NULL)
     {
       ARKodeButcherTable_Free(content->fine_btable);
@@ -194,7 +201,8 @@ int ARKBraid_SetCoarseOrder(braid_App app, int order)
 
   /* Get new number of order conditions */
   content->num_order_conditions =
-    _ARKBraidTheta_GetNumOrderConditions(content->order_fine, content->order_coarse);
+    _ARKBraidTheta_GetNumOrderConditions(content->order_fine,
+                                         content->order_coarse);
 
   return SUNBRAID_SUCCESS;
 }
@@ -340,16 +348,16 @@ int ARKBraid_GetSolution(braid_App app, realtype* tout, N_Vector yout)
 int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
                   braid_Vector u, braid_StepStatus status)
 {
-  braid_Int braid_flag;    /* braid function return flag       */
-  int ark_flag;            /* arkode step return flag          */
-  int flag;                /* arkode function return flag      */
-  int level;               /* current level                    */
-  int rfac;                /* refinement factor                */
-  int fixedstep;           /* flag for fixed step size         */
-  realtype tstart;         /* current time                     */
-  realtype tstop;          /* evolve to this time              */
-  realtype hacc;           /* accuracy based step size         */
-  ARKBraidContent content; /* ARKBraid app content             */
+  braid_Int braid_flag;              /* braid function return flag       */
+  int ark_flag;                      /* arkode step return flag          */
+  int flag;                          /* arkode function return flag      */
+  int level;                         /* current level                    */
+  int rfac;                          /* refinement factor                */
+  int fixedstep;                     /* flag for fixed step size         */
+  realtype tstart;                   /* current time                     */
+  realtype tstop;                    /* evolve to this time              */
+  realtype hacc;                     /* accuracy based step size         */
+  ARKBraidContent content;           /* ARKBraid app content             */
 
   ARKodeButcherTable B       = NULL; /* Butcher table for the step  */
   ARKBraidThetaVecData vdata = NULL; /* vector data for storing order conditions
@@ -378,21 +386,28 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   ARKBraidTheta_StepElemWeights(content, status, u);
 
   /* Turn off error estimation on coarse grids */
-  // if (level > 0)
-  //   arkSetFixedStep(content->ark_mem, tstop - tstart);
+  if (!fixedstep && level > 0)
+    arkSetFixedStep(content->ark_mem, tstop - tstart);
 
   /* Finally propagate the solution */
+  // if (level == 0)
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
                            &ark_flag);
+  // else
+  //   flag = ARKBraid_TakeStep((void*)(content->ark_mem_coarse), tstart, tstop,
+  //                            u->y, &ark_flag);
+
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Restore fixedstep value */
-  content->ark_mem->fixedstep = fixedstep;
+  if (!fixedstep && level > 0)
+    /* Setting zero here turns adaptivity back on */
+    arkSetFixedStep(content->ark_mem, ZERO);
 
   /* Refine grid (XBraid will ignore if refinement is disabled) */
 
   /* Compute refinement factor */
-  if (level == 0)
+  if (braid_StepStatusAcceptsRFactor(status))
   {
     /* Default to no refinement */
     rfac = 1;

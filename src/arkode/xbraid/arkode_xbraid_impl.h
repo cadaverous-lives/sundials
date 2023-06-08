@@ -109,6 +109,9 @@ struct _ARKBraidContent
   int order_coarse;
   int num_order_conditions;
 
+  /* ARKODE memory for coarse grid */
+  ARKodeMem ark_mem_coarse;
+
   /* Butcher tables */
   int num_levels;  /* number of levels in MGRIT hierarchy */
   int *num_tables; /* number of Butcher tables for each level */
@@ -178,10 +181,10 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
 int _ARKBraidTheta_GetBTable(ARKBraidContent content, braid_StepStatus status,
                              braid_Int level, braid_Int ti, ARKodeButcherTable* B);
 
-static int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
+int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
                                          braid_SyncStatus sstatus);
 
-static int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content);
+int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content);
 
 int ARKBraidTheta_NlsResidual(N_Vector thcor, N_Vector r, void* mem);
 

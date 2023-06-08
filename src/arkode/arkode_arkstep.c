@@ -677,18 +677,18 @@ void ARKStepFree(void **arkode_mem)
 
     /* free the RHS vectors */
     if (step_mem->Fe != NULL) {
-      for(j=0; j<step_mem->stages; j++)
+      for(j=0; j<step_mem->stages_allocated; j++)
         arkFreeVec(ark_mem, &step_mem->Fe[j]);
       free(step_mem->Fe);
       step_mem->Fe = NULL;
-      ark_mem->liw -= step_mem->stages;
+      ark_mem->liw -= step_mem->stages_allocated;
     }
     if (step_mem->Fi != NULL) {
-      for(j=0; j<step_mem->stages; j++)
+      for(j=0; j<step_mem->stages_allocated; j++)
         arkFreeVec(ark_mem, &step_mem->Fi[j]);
       free(step_mem->Fi);
       step_mem->Fi = NULL;
-      ark_mem->liw -= step_mem->stages;
+      ark_mem->liw -= step_mem->stages_allocated;
     }
 
     /* free the reusable arrays for fused vector interface */
@@ -1176,6 +1176,9 @@ int arkStep_Init(void* arkode_mem, int init_type)
       if (step_mem->Xvecs == NULL)  return(ARK_MEM_FAIL);
       ark_mem->liw += step_mem->nfusedopvecs;   /* pointers */
     }
+    
+    /* Record the number of stages used to allocate memory */
+    step_mem->stages_allocated = step_mem->stages;
 
     /* Limit max interpolant degree (negative input only overwrites the current
        interpolant degree if it is greater than abs(input). */

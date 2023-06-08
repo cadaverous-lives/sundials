@@ -1044,7 +1044,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
 
   // Xbraid
   udata->x_tol           = 1.0e-6;
-  udata->x_nt            = 16;
+  udata->x_nt            = 300;
   udata->x_skip          = 0;
   udata->x_max_levels    = 2;
   udata->x_min_coarse    = 3;
