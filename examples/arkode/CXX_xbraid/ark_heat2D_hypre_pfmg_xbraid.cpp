@@ -977,7 +977,7 @@ int MyInit(braid_App app, realtype t, braid_Vector *u_ptr)
   // Create new vector
   N_Vector y = N_VNew_Parallel(udata->comm_c, udata->nodes_loc, udata->nodes,
                                udata->ctx);
-  flag = SUNBraidVector_New(y, u_ptr);
+  flag = SUNBraidVector_New(app, y, u_ptr);
   if (flag != 0) return 1;
 
   // Set initial solution at all time points

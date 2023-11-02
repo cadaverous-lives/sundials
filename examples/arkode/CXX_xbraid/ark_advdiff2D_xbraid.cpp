@@ -1,5 +1,5 @@
 /* -----------------------------------------------------------------------------
- * Programmer(s): David J. Gardner @ LLNL
+ * Programmer(s): David J. Gardner @ LLNL, David A. Vargas @ UNM
  * -----------------------------------------------------------------------------
  * SUNDIALS Copyright Start
  * Copyright (c) 2002-2023, Lawrence Livermore National Security
@@ -13,13 +13,13 @@
  * -----------------------------------------------------------------------------
  * Example problem:
  *
- * The following test simulates a simple anisotropic 2D heat equation,
+ * The following test simulates anisotropic 2D advection diffusion in a square
  *
- *   u_t = kx u_xx + ky u_yy + b,
+ *   u_t = νx u_xx + νy u_yy + kx u_x + ky u_y + b(t),
  *
  * for t in [0, 1] and (x,y) in [0, 1]^2, with initial conditions
  *
- *   u(0,x,y) = sin^2(pi x) sin^2(pi y),
+ *   u(0,x,y) = 0,
  *
  * stationary boundary conditions
  *
@@ -27,19 +27,22 @@
  *
  * and the heat source
  *
- *   b(t,x,y) = -2 pi sin^2(pi x) sin^2(pi y) sin(pi t) cos(pi t)
- *              - kx 2 pi^2 (cos^2(pi x) - sin^2(pi x)) sin^2(pi y) cos^2(pi t)
- *              - ky 2 pi^2 (cos^2(pi y) - sin^2(pi y)) sin^2(pi x) cos^2(pi t).
+ *   b(t,x,y) = 6π sin^5(πt) cos(πt) sin^2(πx) sin^2(πy)
+ *            - νx 2π^2 sin^6(πt) cos(2πx) sin^2(πy)
+ *            - νy 2π^2 sin^6(πt) sin^2(πx) cos(2πy)
+ *            - kx π sin^6(πt) sin(2πx) sin^2(πy)
+ *            - ky π sin^6(πt) sin^2(πx) sin(2πy).
  *
  * Under this setup, the problem has the analytical solution
  *
- *    u(t,x,y) = sin^2(pi x) sin^2(pi y) cos^2(pi t).
+ *    u(t,x,y) = sin^2(pi x) sin^2(pi y) sin^6(pi t).
  *
- * The spatial derivatives are computed using second-order centered differences,
+ * The second spatial derivatives are computed using second-order centered differences,
+ * the advection terms are computed using second-order upwind differences,
  * with the data distributed over nx * ny points on a uniform spatial grid. The
  * problem is solved using the XBraid multigrid reduction in time library paired
  * with a diagonally implicit Runge-Kutta method from the ARKODE ARKStep module
- * using an inexact Newton method paired with the PCG or SPGMR linear solver.
+ * using ??? TODO: add method name ???.
  * Several command line options are available to change the problem parameters
  * and ARKStep settings. Use the flag --help for more information.
  * ---------------------------------------------------------------------------*/
@@ -67,6 +70,7 @@
 #define ZERO  RCONST(0.0)
 #define ONE   RCONST(1.0)
 #define TWO   RCONST(2.0)
+#define SIX   RCONST(6.0)
 #define EIGHT RCONST(8.0)
 
 // Macro to access (x,y) location in 1D NVector array
@@ -86,6 +90,10 @@ struct UserData
   // Diffusion coefficients in the x and y directions
   realtype kx;
   realtype ky;
+
+  // Advection coefficients in the x and y directions
+  realtype ax;
+  realtype ay;
 
   // Enable/disable forcing
   bool forcing;
@@ -189,6 +197,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus);
 static int f(realtype t, N_Vector u, N_Vector f, void *user_data);
 
 // Preconditioner setup and solve functions
+// TODO: replace with HYPRE solver
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
                   booleantype *jcurPtr, realtype gamma, void *user_data);
 
@@ -843,7 +852,12 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   // Constants for computing diffusion term
   realtype cx = udata->kx / (udata->dx * udata->dx);
   realtype cy = udata->ky / (udata->dy * udata->dy);
-  realtype cc = -TWO * (cx + cy);
+  
+  // Constants for computing advection term
+  realtype cax = udata->ax / udata->dx;
+  realtype cay = udata->ay / udata->dy;
+
+  realtype cc = -TWO * (cx + cy) - cax - cay;
 
   // Access data arrays
   realtype *uarray = N_VGetArrayPointer(u);
@@ -858,15 +872,27 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   // Iterate over domain interior and compute rhs forcing term
   if (udata->forcing)
   {
+    /*
+    *   b(t,x,y) = 6π sin^5(πt) cos(πt) sin^2(πx) sin^2(πy)
+    *            - [νx 2π^2 sin^6(πt)] cos(2πx) sin^2(πy)
+    *            - [νy 2π^2 sin^6(πt)] sin^2(πx) cos(2πy)
+    *            - [kx π sin^6(πt)] sin(2πx) sin^2(πy)
+    *            - [ky π sin^6(πt)] sin^2(πx) sin(2πy).
+    */
     realtype x, y;
     realtype sin_sqr_x, sin_sqr_y;
-    realtype cos_sqr_x, cos_sqr_y;
 
-    realtype bx = (udata->kx) * TWO * PI * PI;
-    realtype by = (udata->ky) * TWO * PI * PI;
+    realtype sin_t = sin(PI * t);
+    realtype cos_t = cos(PI * t);
+    realtype sin5_t = pow(sin_t, 5);
+    realtype sin6_t = pow(sin_t, 6);
 
-    realtype sin_t_cos_t = sin(PI * t) * cos(PI * t);
-    realtype cos_sqr_t   = cos(PI * t) * cos(PI * t);
+    realtype bx = (udata->kx) * TWO * PI * PI * sin6_t;
+    realtype by = (udata->ky) * TWO * PI * PI * sin6_t;
+
+    realtype bax = (udata->ax) * PI * sin6_t;
+    realtype bay = (udata->ay) * PI * sin6_t;
+
 
     for (sunindextype j = 1; j < ny - 1; j++)
     {
@@ -878,26 +904,27 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
         sin_sqr_x = sin(PI * x) * sin(PI * x);
         sin_sqr_y = sin(PI * y) * sin(PI * y);
 
-        cos_sqr_x = cos(PI * x) * cos(PI * x);
-        cos_sqr_y = cos(PI * y) * cos(PI * y);
 
         farray[IDX(i,j,nx)] =
-          -TWO * PI * sin_sqr_x * sin_sqr_y * sin_t_cos_t
-          -bx * (cos_sqr_x - sin_sqr_x) * sin_sqr_y * cos_sqr_t
-          -by * (cos_sqr_y - sin_sqr_y) * sin_sqr_x * cos_sqr_t;
+          SIX*PI * sin5_t * cos_t * sin_sqr_x * sin_sqr_y
+          -bx * cos(TWO * PI * x) * sin_sqr_y
+          -by * cos(TWO * PI * y) * sin_sqr_x
+          -bax * sin(TWO * PI * x) * sin_sqr_y
+          -bay * sin(TWO * PI * y) * sin_sqr_x;
       }
     }
   }
 
-  // Iterate over domain interior and add rhs diffusion term
+  // Iterate over domain interior and add rhs advection/diffusion terms
   for (sunindextype j = 1; j < ny - 1; j++)
   {
     for (sunindextype i = 1; i < nx - 1; i++)
     {
+      // Here we assume the advection coefficients are always positive.
       farray[IDX(i,j,nx)] +=
         cc * uarray[IDX(i,j,nx)]
-        + cx * (uarray[IDX(i-1,j,nx)] + uarray[IDX(i+1,j,nx)])
-        + cy * (uarray[IDX(i,j-1,nx)] + uarray[IDX(i,j+1,nx)]);
+        + cx * uarray[IDX(i-1,j,nx)] + (cx + cax) * uarray[IDX(i+1,j,nx)]
+        + cy * uarray[IDX(i,j-1,nx)] + (cy + cay) * uarray[IDX(i,j+1,nx)];
     }
   }
 
@@ -991,6 +1018,10 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->kx = ONE;
   udata->ky = ONE;
 
+  // Advection coefficient
+  udata->ax = ZERO;
+  udata->ay = ZERO;
+
   // Enable forcing
   udata->forcing = true;
 
@@ -1050,7 +1081,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_tol           = 1.0e-6;
   udata->x_nt            = 300;
   udata->x_skip          = 0;
-  udata->x_max_levels    = 2;
+  udata->x_max_levels    = 16;
   udata->x_min_coarse    = 3;
   udata->x_nrelax        = 1;
   udata->x_nrelax0       = -1;
@@ -1059,7 +1090,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_cfactor0      = -1;
   udata->x_max_iter      = 100;
   udata->x_storage       = -1;
-  udata->x_print_level   = 1;
+  udata->x_print_level   = 2;
   udata->x_access_level  = 1;
   udata->x_rfactor_limit = 10;
   udata->x_rfactor_fail  = 4;
@@ -1123,6 +1154,18 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->kx = stod((*argv)[arg_idx++]);
       udata->ky = stod((*argv)[arg_idx++]);
+    }
+    // Advection parameters
+    else if (arg == "--a")
+    {
+      udata->ax = stod((*argv)[arg_idx++]);
+      udata->ay = stod((*argv)[arg_idx++]);
+      // Check that advection coefficients are positive
+      if (udata->ax < ZERO || udata->ay < ZERO)
+      {
+        cerr << "ERROR: Advection coefficients must be positive" << endl;
+        return -1;
+      }
     }
     // Disable forcing
     else if (arg == "--noforcing")
@@ -1331,11 +1374,11 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
 static int Solution(realtype t, N_Vector u, UserData *udata)
 {
   realtype x, y;
-  realtype cos_sqr_t;
+  realtype cos6_t;
   realtype sin_sqr_x, sin_sqr_y;
 
   // Constants for computing solution
-  cos_sqr_t = cos(PI * t) * cos(PI * t);
+  cos6_t = pow(cos(PI * t), 6);
 
   // Initialize u to zero (handles boundary conditions)
   N_VConst(ZERO, u);
@@ -1353,7 +1396,7 @@ static int Solution(realtype t, N_Vector u, UserData *udata)
       sin_sqr_x = sin(PI * x) * sin(PI * x);
       sin_sqr_y = sin(PI * y) * sin(PI * y);
 
-      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * cos_sqr_t;
+      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * cos6_t;
     }
   }
 
@@ -1382,6 +1425,7 @@ static void InputHelp()
   cout << "  --mesh <nx> <ny>        : mesh points in the x and y directions" << endl;
   cout << "  --domain <xu> <yu>      : domain upper bound in the x and y direction" << endl;
   cout << "  --k <kx> <ky>           : diffusion coefficients" << endl;
+  cout << "  --a <ax> <ay>           : advection coefficients" << endl;
   cout << "  --noforcing             : disable forcing term" << endl;
   cout << "  --tf <time>             : final time" << endl;
   cout << "  --rtol <rtol>           : relative tolerance" << endl;
