@@ -146,7 +146,9 @@ sunindextype SUNDlsMat_denseGETRF(realtype **a, sunindextype m, sunindextype n, 
     /* find l = pivot row number */
     l=k;
     for (i=k+1; i < m; i++)
-      if (SUNRabs(col_k[i]) > SUNRabs(col_k[l])) l=i;
+      if (SUNRabs(col_k[i]) > SUNRabs(col_k[l])) {
+        l=i;
+      }
     p[k] = l;
 
     /* check for zero pivot element */

@@ -81,6 +81,10 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
   content->flag_refine_downcycle = SUNFALSE;
   content->flag_skip_downcycle   = SUNTRUE;
 
+  /* Newton solver for theta method order conditions */
+  content->NLS = NULL;
+  content->NLS_mem = NULL;
+  
   /* Fine and coarse grid method orders */
 
   if (content->ark_mem->step_mem == NULL) return SUNBRAID_ILLINPUT;
@@ -391,6 +395,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Finally propagate the solution */
   // if (level == 0)
+  printf("Level: %d\n", level);
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
                            &ark_flag);
   // else

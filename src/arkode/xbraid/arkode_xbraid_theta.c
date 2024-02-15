@@ -179,6 +179,9 @@ int ARKBraidTheta_InitVecData(braid_App app, void** vdata_ptr)
   {
     vdata->Phi = (realtype*)malloc(num_conditions * sizeof(realtype));
     if (vdata->Phi == NULL) return SUNBRAID_ALLOCFAIL;
+    for (size_t i = 0; i < num_conditions; i++) {
+      vdata->Phi[i] = 0.;
+    }
   }
 
   /* Attach vector data */
@@ -243,8 +246,9 @@ int ARKBraidTheta_BufPack(braid_App app, void* buffer, void* vdata_ptr)
   realtype* buf = (realtype*)buffer;
   buf[0]        = vdata->tprior;
   buf[1]        = vdata->etascale;
-  for (int i = 0; i < content->num_order_conditions; i++)
+  for (int i = 0; i < content->num_order_conditions; i++) {
     buf[i + 2] = vdata->Phi[i];
+  }
 
   return SUNBRAID_SUCCESS;
 }
@@ -271,8 +275,9 @@ int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
   realtype* buf   = (realtype*)buffer;
   vdata->tprior   = buf[0];
   vdata->etascale = buf[1];
-  for (int i = 2; i < content->num_order_conditions; i++)
+  for (int i = 2; i < content->num_order_conditions; i++) {
     vdata->Phi[i] = buf[i];
+  }
 
   /* Return vector data */
   *vdata_ptr = vdata;
@@ -665,8 +670,7 @@ int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
 
   content->num_levels = nlevels;
 
-  content->coarse_btables =
-    (ARKodeButcherTable**)malloc((nlevels - 1) * sizeof(ARKodeButcherTable*));
+  content->coarse_btables = (ARKodeButcherTable**)malloc((nlevels - 1) * sizeof(ARKodeButcherTable*));
   if (content->coarse_btables == NULL) return SUNBRAID_ALLOCFAIL;
   content->coarse_btables -= 1; /* offset array by one, since we are storing
                                    nothing for lvl 0 */
@@ -690,8 +694,7 @@ int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
 
     ntpoints                 = iu - il + 1;
     content->num_tables[lvl] = ntpoints;
-    content->coarse_btables[lvl] =
-      (ARKodeButcherTable*)malloc(ntpoints * sizeof(ARKodeButcherTable));
+    content->coarse_btables[lvl] = (ARKodeButcherTable*)malloc(ntpoints * sizeof(ARKodeButcherTable));
     if (content->coarse_btables[lvl] == NULL) return SUNBRAID_ALLOCFAIL;
 
     for (int ti = 0; ti < ntpoints; ti++)
@@ -896,19 +899,19 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
   mem->th0 = N_VNew_Serial(nc, sunctx);
   if (mem->th0 == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->rhs = N_VClone_Serial(mem->th0);
+  mem->rhs = N_VNew_Serial(nc, sunctx);
   if (mem->rhs == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->thcur = N_VClone_Serial(mem->th0);
+  mem->thcur = N_VNew_Serial(nc, sunctx);
   if (mem->thcur == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->thcor = N_VClone_Serial(mem->th0);
+  mem->thcor = N_VNew_Serial(nc, sunctx);
   if (mem->thcor == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->weight = N_VClone_Serial(mem->th0);
+  mem->weight = N_VNew_Serial(nc, sunctx);
   if (mem->weight == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->x = N_VClone_Serial(mem->th0);
+  mem->x = N_VNew_Serial(nc, sunctx);
   if (mem->x == NULL) return SUNBRAID_ALLOCFAIL;
 
   mem->J = SUNDenseMatrix(nc, nc, sunctx);
@@ -919,6 +922,13 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
 
   flag = SUNLinSolInitialize(mem->LS);
   if (flag != SUNLS_SUCCESS) return SUNBRAID_SUNFAIL;
+
+  /* Initialize workspace variables */
+  N_VConst(ZERO, mem->rhs);
+  N_VConst(ZERO, mem->thcor);
+
+  /* Set weight for norm */
+  N_VConst(ONE, mem->weight);
 
   /* Attach residual/jacobian functions and set initial guess */
   switch (content->order_coarse)
@@ -937,9 +947,6 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
     break;
   default: return SUNBRAID_ILLINPUT;
   }
-
-  /* Set norm weights */
-  for (int i = 0; i < nc; i++) NV_Ith_S(mem->weight, i) = ONE;
 
   /* Create linear solver */
   mem->LS = SUNLinSol_Dense(mem->th0, mem->J, sunctx);

@@ -949,15 +949,14 @@ int ARKStepSetTables(void *arkode_mem, int q, int p,
     /* reallocate reusable arrays for fused vector operations */
     int nfusedopvecs = 2 * step_mem->stages + 2 + step_mem->nforcing;
     if (step_mem->cvals != NULL) {
-      step_mem->cvals = (realtype *) realloc(step_mem->cvals, step_mem->nfusedopvecs * sizeof(realtype));
+      step_mem->cvals = (realtype *) realloc(step_mem->cvals, nfusedopvecs * sizeof(realtype));
       if (step_mem->cvals == NULL)  return(ARK_MEM_FAIL);
       for (j=step_mem->nfusedopvecs; j<nfusedopvecs; j++)
         step_mem->cvals[j] = ZERO;
       ark_mem->lrw += nfusedopvecs - step_mem->nfusedopvecs;
     }
     if (step_mem->Xvecs != NULL) {
-      step_mem->Xvecs = (N_Vector *) calloc(step_mem->nfusedopvecs,
-                                            sizeof(N_Vector));
+      step_mem->Xvecs = (N_Vector *) realloc(step_mem->Xvecs, nfusedopvecs * sizeof(N_Vector));
       if (step_mem->Xvecs == NULL)  return(ARK_MEM_FAIL);
       for (j=step_mem->nfusedopvecs; j<nfusedopvecs; j++)
         step_mem->Xvecs[j] = NULL;
