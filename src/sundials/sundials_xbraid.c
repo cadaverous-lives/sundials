@@ -224,10 +224,6 @@ int SUNBraidVector_Init(braid_App app, realtype t, braid_Vector *u_ptr)
   if (flag != SUNBRAID_SUCCESS) return flag;
 
   /* Initialize vector data */
-  flag = SUNBraidApp_InitVecData(app, &((*u_ptr)->vdata));
-  if (flag != SUNBRAID_SUCCESS) return flag;
-
-  /* Initialize vector data */
   N_VConst(ZERO, vy);
 
   return SUNBRAID_SUCCESS;
@@ -407,7 +403,7 @@ int SUNBraidVector_BufUnpack(braid_App app, void *buffer, braid_Vector *u_ptr,
 
   /* Unpack integrator buffer starting at offset */
   void* tmp_buffer = (char*) buffer + offset;
-  SUNBraidApp_BufUnpack(app, tmp_buffer, (*u_ptr)->vdata);
+  SUNBraidApp_BufUnpack(app, tmp_buffer, &((*u_ptr)->vdata));
 
   return SUNBRAID_SUCCESS;
 }

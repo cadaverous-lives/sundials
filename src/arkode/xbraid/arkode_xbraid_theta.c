@@ -168,8 +168,8 @@ int ARKBraidTheta_InitVecData(braid_App app, void** vdata_ptr)
   if (vdata == NULL) return SUNBRAID_ALLOCFAIL;
 
   /* Create vector data */
-  vdata->tprior   = RCONST(0.);
-  vdata->etascale = RCONST(1.);
+  vdata->tprior   = ZERO;
+  vdata->etascale = ONE;
   vdata->Phi      = NULL;
 
   /* Allocate for order conditions (Phi) */
@@ -180,7 +180,7 @@ int ARKBraidTheta_InitVecData(braid_App app, void** vdata_ptr)
     vdata->Phi = (realtype*)malloc(num_conditions * sizeof(realtype));
     if (vdata->Phi == NULL) return SUNBRAID_ALLOCFAIL;
     for (size_t i = 0; i < num_conditions; i++) {
-      vdata->Phi[i] = 0.;
+      vdata->Phi[i] = ZERO;
     }
   }
 
@@ -243,6 +243,7 @@ int ARKBraidTheta_BufPack(braid_App app, void* buffer, void* vdata_ptr)
   ARKBraidContent content = (ARKBraidContent)app->content;
 
   /* Copy data into buffer */
+  // printf("  Packing buffer: tprior=%f, etascale=%f, Phi0=%f\n", vdata->tprior, vdata->etascale, vdata->Phi[0]);
   realtype* buf = (realtype*)buffer;
   buf[0]        = vdata->tprior;
   buf[1]        = vdata->etascale;
@@ -266,18 +267,17 @@ int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
   ARKBraidContent content = (ARKBraidContent)app->content;
 
   /* Allocate vdata */
-  flag = ARKBraidTheta_InitVecData(app, vdata_ptr);
+  flag = ARKBraidTheta_InitVecData(app, (void**)&vdata);
   if (flag != SUNBRAID_SUCCESS) return flag;
-
-  vdata = (ARKBraidThetaVecData)*vdata_ptr;
 
   /* Copy data from buffer */
   realtype* buf   = (realtype*)buffer;
   vdata->tprior   = buf[0];
   vdata->etascale = buf[1];
-  for (int i = 2; i < content->num_order_conditions; i++) {
-    vdata->Phi[i] = buf[i];
+  for (int i = 0; i < content->num_order_conditions; i++) {
+    vdata->Phi[i] = buf[i + 2];
   }
+  // printf("unPacking buffer: tprior=%f, etascale=%f, Phi0=%f\n", vdata->tprior, vdata->etascale, vdata->Phi[0]);
 
   /* Return vector data */
   *vdata_ptr = vdata;
@@ -463,10 +463,11 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
     {
       /* Reset elementary weights */
       for (int i = 0; i < content->num_order_conditions; i++)
-        vdata->Phi[i] = RCONST(0.0);
+        vdata->Phi[i] = ZERO;
 
       vdata->tprior   = tstart;
       vdata->etascale = cfactor * (tstop - tstart);
+      // printf("Beginning of F-interval: ti=%d, tstart=%f, tstop=%f\n", ti, tstart, tstop);
     }
 
     /* etascale is a prediction of the total length of the coarse interval
@@ -513,6 +514,12 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       int iu, il; /* highest and lowest time indices on this processor */
       int tic;    /* time index on next coarsest level */
 
+      /* Computing on level for level + 1 */
+      flag = braid_StepStatusGetTIUL(status, &iu, &il, level + 1);
+      CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+
+      tic = (ti+1) / cfactor - il;
+
       /* Normalize weights */
       eta_c = (tstop - vdata->tprior) / vdata->etascale;
 
@@ -527,18 +534,10 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       }
 
       /* Solve order conditions (solution in NLS_mem->thcur)*/
+      printf("(This proc il=%d, iu=%d) NLSSolve: level=%d, tic=%d, phi0=%f, eta_c=%f\n", il, iu, level, tic, vdata->Phi[0], eta_c); 
       ARKBraidTheta_NlsSolve(content->NLS, content->NLS_mem, vdata->Phi);
 
       /* Set new Butcher table */
-
-      /* Computing on level for level + 1 */
-      flag = braid_StepStatusGetTIUL(status, &iu, &il, level + 1);
-      CHECK_BRAID_RETURN(content->last_flag_braid, flag);
-
-      tic = (ti+1) / cfactor - il;
-
-      // printf("(This proc il=%d, iu=%d) SetBtable: level=%d, tic=%d\n", il, iu, level, tic); 
-
       _ARKBraidTheta_SetBtable(content->coarse_btables[level + 1][tic], content,
                                NV_DATA_S(content->NLS_mem->thcur));
     }
@@ -857,7 +856,16 @@ int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
   /* Solve nonlinear system */
   flag = SUNNonlinSolSolve(NLS, nls_mem->th0, nls_mem->thcor, nls_mem->weight,
                            NLS_TOL, SUNTRUE, nls_mem);
-  if (flag != SUN_NLS_SUCCESS) printf("NLS failed with flag %d\n", flag);
+  if (flag != SUN_NLS_SUCCESS)
+  {
+    printf("NLS failed with flag %d\n", flag);
+    printf("rhs was: ");
+    for (int i = 0; i < nls_mem->nconds; i++)
+    {
+      printf("%f, ", rhs[i]);
+    }
+    printf("\n");
+  } 
   return flag;
 
   /* Copy solution to output */
