@@ -266,9 +266,7 @@ int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
   /* Access app content */
   ARKBraidContent content = (ARKBraidContent)app->content;
 
-  /* Allocate vdata */
-  flag = ARKBraidTheta_InitVecData(app, (void**)&vdata);
-  if (flag != SUNBRAID_SUCCESS) return flag;
+  vdata = (ARKBraidThetaVecData)(*vdata_ptr);
 
   /* Copy data from buffer */
   realtype* buf   = (realtype*)buffer;
@@ -278,9 +276,6 @@ int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr)
     vdata->Phi[i] = buf[i + 2];
   }
   // printf("unPacking buffer: tprior=%f, etascale=%f, Phi0=%f\n", vdata->tprior, vdata->etascale, vdata->Phi[0]);
-
-  /* Return vector data */
-  *vdata_ptr = vdata;
 
   return SUNBRAID_SUCCESS;
 }
