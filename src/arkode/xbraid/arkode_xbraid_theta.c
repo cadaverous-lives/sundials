@@ -923,12 +923,6 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
   mem->J = SUNDenseMatrix(nc, nc, sunctx);
   if (mem->J == NULL) return SUNBRAID_ALLOCFAIL;
 
-  mem->LS = SUNLinSol_Dense(mem->th0, mem->J, sunctx);
-  if (mem->LS == NULL) return SUNBRAID_ALLOCFAIL;
-
-  flag = SUNLinSolInitialize(mem->LS);
-  if (flag != SUNLS_SUCCESS) return SUNBRAID_SUNFAIL;
-
   /* Initialize workspace variables */
   N_VConst(ZERO, mem->rhs);
   N_VConst(ZERO, mem->thcor);
