@@ -395,7 +395,6 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Finally propagate the solution */
   // if (level == 0)
-  printf("Level: %d\n", level);
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
                            &ark_flag);
   // else

@@ -535,7 +535,9 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       flag = braid_StepStatusGetTIUL(status, &iu, &il, level + 1);
       CHECK_BRAID_RETURN(content->last_flag_braid, flag);
 
-      tic = ti / cfactor - il;
+      tic = (ti+1) / cfactor - il;
+
+      // printf("(This proc il=%d, iu=%d) SetBtable: level=%d, tic=%d\n", il, iu, level, tic); 
 
       _ARKBraidTheta_SetBtable(content->coarse_btables[level + 1][tic], content,
                                NV_DATA_S(content->NLS_mem->thcur));
@@ -635,8 +637,9 @@ int _ARKBraidTheta_GetBTable(ARKBraidContent content, braid_StepStatus status,
   /* Get the coarse (relative) time index */
   flag = braid_StepStatusGetTIUL(status, &iu, &il, level);
   CHECK_BRAID_RETURN(content->last_flag_braid, flag);
-  tir = ti - il;
+  tir = ti - il + 1;
 
+  // printf("GetBTable: il=%d, iu=%d, level=%d, ti=%d\n", il, iu, level, ti);
   if (level == 0 || content->order_coarse <= content->order_fine ||
       content->coarse_btables == NULL || content->coarse_btables[level] == NULL ||
       content->coarse_btables[level][tir] == NULL)
