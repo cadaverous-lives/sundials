@@ -293,8 +293,8 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
   int caller;              /* XBraid calling function */
   int level, nlevels;      /* XBraid level, number of levels */
   int iter;                /* XBraid iteration */
-  int iu, il;   /* XBraid index of lowest and highest time indices owned by this
-                   processor */
+  int proc;                /* ID of current proc */
+  int iu, il;              /* upper and lower time-indices on this proc */
   int ncpoints; /* XBraid number of coarse grid points */
   ARKodeARKStepMem step_mem; /* ARKStep memory */
 
@@ -363,6 +363,8 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
   CHECK_BRAID_RETURN(content->last_flag_braid, flag);
   flag = braid_SyncStatusGetIter(sstatus, &iter);
   CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetTIUL(sstatus, &iu, &proc, 0);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
 
   /* Check if this is a new hierarchy */
   if (caller == braid_ASCaller_Drive_AfterInit ||
@@ -385,7 +387,7 @@ int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus)
     if (nlevels > 1)
     {
       content->flag_refine_downcycle = SUNTRUE;
-      printf("ARKBraid: Computing coarse grid Butcher tables\n");
+      if (proc == 0) printf("  ARKBraid: Computing coarse grid Butcher tables\n");
     }
   }
 
@@ -422,7 +424,7 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
   /* Turn off computation of elementary weights once upcycle starts */
   if (content->flag_refine_downcycle && caller == braid_ASCaller_FInterp)
   {
-    printf("Turning off elementary weight computation\n");
+    printf("  ARKBraid: Turning off elementary weight computation\n");
     content->flag_refine_downcycle = SUNFALSE;
   }
 
@@ -529,7 +531,6 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       }
 
       /* Solve order conditions (solution in NLS_mem->thcur)*/
-      printf("(This proc il=%d, iu=%d) NLSSolve: level=%d, tic=%d, phi0=%f, eta_c=%f\n", il, iu, level, tic, vdata->Phi[0], eta_c); 
       ARKBraidTheta_NlsSolve(content->NLS, content->NLS_mem, vdata->Phi);
 
       /* Set new Butcher table */

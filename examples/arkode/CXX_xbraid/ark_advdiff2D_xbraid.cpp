@@ -38,7 +38,7 @@
  *    u(t,x,y) = sin^2(pi x) sin^2(pi y) sin^6(pi t).
  *
  * The second spatial derivatives are computed using second-order centered differences,
- * the advection terms are computed using second-order upwind differences,
+ * the advection terms are computed using third order upwind differences,
  * with the data distributed over nx * ny points on a uniform spatial grid. The
  * problem is solved using the XBraid multigrid reduction in time library paired
  * with a diagonally implicit Runge-Kutta method from the ARKODE ARKStep module
@@ -850,14 +850,15 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   sunindextype ny = udata->ny;
 
   // Constants for computing diffusion term
-  realtype cx = udata->kx / (udata->dx * udata->dx);
-  realtype cy = udata->ky / (udata->dy * udata->dy);
+  realtype cx = udata->kx/12 / (udata->dx * udata->dx);
+  realtype cy = udata->ky/12 / (udata->dy * udata->dy);
+  realtype cc = -30*(cx + cy);
   
   // Constants for computing advection term
+  realtype axy = sqrt(udata->ax*udata->ax + udata->ay*udata->ay);
+  realtype caxy = axy / sqrt(udata->dx*udata->dx + udata->dy*udata->dy);
   realtype cax = udata->ax / udata->dx;
   realtype cay = udata->ay / udata->dy;
-
-  realtype cc = -TWO * (cx + cy) - cax - cay;
 
   // Access data arrays
   realtype *uarray = N_VGetArrayPointer(u);
@@ -915,16 +916,80 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     }
   }
 
-  // Iterate over domain interior and add rhs advection/diffusion terms
+  // Iterate over domain interior and add rhs diffusion terms
   for (sunindextype j = 1; j < ny - 1; j++)
   {
     for (sunindextype i = 1; i < nx - 1; i++)
     {
-      // Here we assume the advection coefficients are always positive.
-      farray[IDX(i,j,nx)] +=
-        cc * uarray[IDX(i,j,nx)]
-        + cx * uarray[IDX(i-1,j,nx)] + (cx + cax) * uarray[IDX(i+1,j,nx)]
-        + cy * uarray[IDX(i,j-1,nx)] + (cy + cay) * uarray[IDX(i,j+1,nx)];
+      // Second order
+      // farray[IDX(i,j,nx)] +=
+      //   cc * uarray[IDX(i,j,nx)]
+      //   + cx * uarray[IDX(i-1,j,nx)] + cx * uarray[IDX(i+1,j,nx)]
+      //   + cy * uarray[IDX(i,j-1,nx)] + cy * uarray[IDX(i,j+1,nx)];
+
+      // Fourth order (letting outside values = 0)
+      farray[IDX(i,j,nx)] += cc * uarray[IDX(i,j,nx)]
+        + 16*cx*(uarray[IDX(i-1,j,nx)] + uarray[IDX(i+1,j,nx)])
+        + 16*cy*(uarray[IDX(i,j-1,nx)] + uarray[IDX(i,j+1,nx)]);
+      if (i < nx - 2) {farray[IDX(i,j,nx)] -= cx * uarray[IDX(i+2,j,nx)];}
+      if (i > 1)      {farray[IDX(i,j,nx)] -= cx * uarray[IDX(i-2,j,nx)];}
+      if (j < ny - 2) {farray[IDX(i,j,nx)] -= cy * uarray[IDX(i,j+2,nx)];}
+      if (j > 1)      {farray[IDX(i,j,nx)] -= cy * uarray[IDX(i,j-2,nx)];}
+    }
+  }
+
+  // first order upwinding for advection
+  // for (sunindextype j = 1; j < ny - 1; j++)
+  // {
+  //   for (sunindextype i = 1; i < nx - 1; i++)
+  //   {
+  //     // Here we assume the advection coefficients are always positive.
+      // farray[IDX(i,j,nx)] +=
+      //   cax * uarray[IDX(i+1,j,nx)] + cay * uarray[IDX(i,j+1,nx)]
+      //   - (cax + cay) * uarray[IDX(i, j, nx)];
+  //     // farray[IDX(i,j,nx)] += caxy * (uarray[IDX(i+1,j+1,nx)] - uarray[IDX(i, j, nx)]);
+  //   }
+  // }
+
+  // third order upwinding for advection (letting outside values = 0)
+  for (sunindextype j = 1; j < ny - 1; j++)
+  {
+    for (sunindextype i = 1; i < nx - 1; i++)
+    {
+      if (i < nx - 2)
+      {
+        farray[IDX(i,j,nx)] += 
+          cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i+2,j,nx)]/6 - uarray[IDX(i-1,j,nx)]/3) - cax * uarray[IDX(i,j,nx)]/2;
+      }
+      else
+      {
+        farray[IDX(i,j,nx)] += 
+          cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i-1,j,nx)]/3) - cax * uarray[IDX(i,j,nx)]/2;
+      }
+      if (j < ny - 2)
+      {
+        farray[IDX(i,j,nx)] += 
+          cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j+2,nx)]/6 - uarray[IDX(i,j-1,nx)]/3) - cay * uarray[IDX(i,j,nx)]/2;
+      }
+      else
+      {
+        farray[IDX(i,j,nx)] += 
+          cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j-1,nx)]/3) - cay * uarray[IDX(i,j,nx)]/2;
+      }
+      // if ((j < ny - 2) && (i < nx - 2))
+      // {
+      //   farray[IDX(i,j,nx)] += 
+      //       cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i+2,j,nx)]/6 - uarray[IDX(i-1,j,nx)]/3)
+      //     + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j+2,nx)]/6 - uarray[IDX(i,j-1,nx)]/3)
+      //     - (cax + cay) * uarray[IDX(i,j,nx)]/2;
+      // }
+      // else
+      // {
+      //   farray[IDX(i,j,nx)] += 
+      //       cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i-1,j,nx)]/3)
+      //     + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j-1,nx)]/3)
+      //     - (cax + cay) * uarray[IDX(i,j,nx)]/2;
+      // }
     }
   }
 
@@ -1033,8 +1098,8 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->yu = ONE;
 
   // Number of nodes in the x and y directions
-  udata->nx    = 32;
-  udata->ny    = 32;
+  udata->nx    = 16;
+  udata->ny    = 16;
   udata->nodes = udata->nx * udata->ny;
 
   // Mesh spacing in the x and y directions
@@ -1047,14 +1112,14 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->nprocs_w = 1;
 
   // Integrator settings
-  udata->rtol        = RCONST(1.e-5);   // relative tolerance
+  udata->rtol        = RCONST(1.e-2);   // relative tolerance
   udata->atol        = RCONST(1.e-10);  // absolute tolerance
   udata->order       = 2;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
 
   // Linear solver and preconditioner options
-  udata->pcg       = true;       // use PCG (true) or GMRES (false)
+  udata->pcg       = false;       // use PCG (true) or GMRES (false)
   udata->prec      = true;       // enable preconditioning
   udata->lsinfo    = false;      // output residual history
   udata->liniters  = 100;        // max linear iterations
@@ -1199,9 +1264,9 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
       udata->diagnostics = true;
     }
     // Linear solver settings
-    else if (arg == "--gmres")
+    else if (arg == "--pcg")
     {
-      udata->pcg = false;
+      udata->pcg = true;
     }
     else if (arg == "--lsinfo")
     {
@@ -1374,11 +1439,11 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
 static int Solution(realtype t, N_Vector u, UserData *udata)
 {
   realtype x, y;
-  realtype cos6_t;
+  realtype sin6_t;
   realtype sin_sqr_x, sin_sqr_y;
 
   // Constants for computing solution
-  cos6_t = pow(cos(PI * t), 6);
+  sin6_t = pow(sin(PI * t), 6);
 
   // Initialize u to zero (handles boundary conditions)
   N_VConst(ZERO, u);
@@ -1396,7 +1461,7 @@ static int Solution(realtype t, N_Vector u, UserData *udata)
       sin_sqr_x = sin(PI * x) * sin(PI * x);
       sin_sqr_y = sin(PI * y) * sin(PI * y);
 
-      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * cos6_t;
+      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * sin6_t;
     }
   }
 
@@ -1433,7 +1498,7 @@ static void InputHelp()
   cout << "  --nonlinear             : disable linearly implicit flag" << endl;
   cout << "  --order <ord>           : method order" << endl;
   cout << "  --diagnostics           : output diagnostics" << endl;
-  cout << "  --gmres                 : use GMRES linear solver" << endl;
+  cout << "  --pcg                   : use pcg linear solver (default GMRES)" << endl;
   cout << "  --lsinfo                : output residual history" << endl;
   cout << "  --liniters <iters>      : max number of iterations" << endl;
   cout << "  --epslin <factor>       : linear tolerance factor" << endl;
@@ -1472,12 +1537,14 @@ static void InputHelp()
 static int PrintUserData(UserData *udata)
 {
   cout << endl;
-  cout << "2D Heat PDE test problem:"                     << endl;
+  cout << "2D Advection/Diffusion PDE test problem:"                     << endl;
   cout << " --------------------------------- "           << endl;
   cout << "  nprocs         = " << udata->nprocs_w        << endl;
   cout << " --------------------------------- "           << endl;
   cout << "  kx             = " << udata->kx              << endl;
   cout << "  ky             = " << udata->ky              << endl;
+  cout << "  ax             = " << udata->ax              << endl;
+  cout << "  ay             = " << udata->ay              << endl;
   cout << "  forcing        = " << udata->forcing         << endl;
   cout << "  tf             = " << udata->tf              << endl;
   cout << "  xu             = " << udata->xu              << endl;
