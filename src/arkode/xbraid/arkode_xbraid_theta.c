@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  * SUNDIALS Copyright End
  * --------------------------------------------------------------------------
- * This is the implementation file for the ARKODE + XBraid interface.
+ * This is an implementation file for the ARKODE + XBraid interface.
  * -------------------------------------------------------------------------- */
 
 #include "arkode/arkode.h"
@@ -605,6 +605,14 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
     B->q = 2;
     B->p = 2;
     break;
+  case 4:
+    if (guess) _theta_sdirk4_guess(theta);
+    _theta_sdirk4_btable_A(A, theta);
+    _theta_sdirk4_btable_b(B->b, theta);
+    _theta_sdirk4_btable_c(B->c, theta);
+    B->q = 3;
+    B->p = 3;
+    break;
   default:
     free(A);
     if (guess) free(theta);
@@ -791,14 +799,20 @@ int ARKBraidTheta_NlsLSolve(N_Vector b, void* mem)
 }
 
 int ARKBraidTheta_NlsConvTest(SUNNonlinearSolver NLS, N_Vector y, N_Vector del,
-                              realtype tol, N_Vector ewt, void* mem)
+                              realtype tol, N_Vector ewt, void* data)
 {
+  SUNNonlinearSolverContent_Newton nls_content = (SUNNonlinearSolverContent_Newton)NLS->content;
   realtype delnrm;
 
   /* Compute the norm of the correction */
   delnrm = N_VWrmsNorm(del, ewt);
 
   if (delnrm <= tol) return SUN_NLS_SUCCESS;
+  else if (nls_content->nconvfails < 100)
+  {
+    nls_content->jcur = SUNFALSE;
+    return SUN_NLS_CONV_RECVR;
+  }
   else return SUN_NLS_CONTINUE;
 }
 
@@ -841,7 +855,9 @@ int ARKBraidTheta_NlsSetup(ARKodeMem ark_mem, ARKBraidNlsMem nls_mem,
 int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
                            realtype* rhs)
 {
-  int flag; /* return flag */
+  int flag = -1; /* return flag */
+  int resets = 0;   /* Number of times solve has been restarted with different initial iterate */
+  int reset_flag = 0;
 
   /* Check input */
   if (NLS == NULL || nls_mem == NULL || rhs == NULL) return SUNBRAID_ILLINPUT;
@@ -850,19 +866,45 @@ int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
   for (int i = 0; i < nls_mem->nconds; i++) NV_Ith_S(nls_mem->rhs, i) = rhs[i];
 
   /* Solve nonlinear system */
-  flag = SUNNonlinSolSolve(NLS, nls_mem->th0, nls_mem->thcor, nls_mem->weight,
-                           NLS_TOL, SUNTRUE, nls_mem);
-  if (flag != SUN_NLS_SUCCESS)
+  // for (int i = 0; i < 2; i++)
+  while (flag != SUN_NLS_SUCCESS)
   {
-    printf("NLS failed with flag %d\n", flag);
-    printf("rhs was: ");
-    for (int i = 0; i < nls_mem->nconds; i++)
+    flag = SUNNonlinSolSolve(NLS, nls_mem->th0, nls_mem->thcor, nls_mem->weight,
+                            NLS_TOL, SUNTRUE, nls_mem);
+    if (flag != SUN_NLS_SUCCESS)
     {
-      printf("%f, ", rhs[i]);
-    }
-    printf("\n");
-  } 
-  return flag;
+      printf("NLS failed with flag %d\n", flag);
+      printf("rhs was: ");
+      for (int i = 0; i < nls_mem->nconds; i++)
+      {
+        printf("%f, ", rhs[i]);
+      }
+      printf("\n");
+
+      if (nls_mem->alt_init)
+      {
+        reset_flag = nls_mem->alt_init(NV_DATA_S(nls_mem->th0), resets);
+        reset_flag = nls_mem->alt_init(NV_DATA_S(nls_mem->thcur), resets);
+        if (reset_flag == SUNFALSE) {
+          printf("Failed...\n");
+          return flag;
+        }
+        printf("resetting %d...\n", resets);
+      }
+      else
+      {
+        nls_mem->init(NV_DATA_S(nls_mem->th0));
+        nls_mem->init(NV_DATA_S(nls_mem->thcur));
+        if (resets > 0) {
+          printf("Failed...\n");
+          return flag;
+        }
+        printf("resetting %d...\n", resets);
+      }
+      N_VConst(0., nls_mem->thcor);
+      resets++;
+    } 
+  }
 
   /* Copy solution to output */
   N_VLinearSum(ONE, nls_mem->th0, ONE, nls_mem->thcor, nls_mem->thcur);
@@ -932,19 +974,30 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem)
   N_VConst(ONE, mem->weight);
 
   /* Attach residual/jacobian functions and set initial guess */
+  mem->alt_init = NULL;
   switch (content->order_coarse)
   {
   case 2:
     mem->res = _theta_sdirk2_res;
     mem->jac = _theta_sdirk2_jac;
+    mem->init = _theta_sdirk2_guess;
     _theta_sdirk2_guess(NV_DATA_S(mem->th0));
     _theta_sdirk2_guess(NV_DATA_S(mem->thcur));
     break;
   case 3:
     mem->res = _theta_sdirk3_res;
     mem->jac = _theta_sdirk3_jac;
+    mem->init = _theta_sdirk3_guess;
+    mem->alt_init = _theta_sdirk3_altguess;
     _theta_sdirk3_guess(NV_DATA_S(mem->th0));
     _theta_sdirk3_guess(NV_DATA_S(mem->thcur));
+    break;
+  case 4:
+    mem->res = _theta_sdirk4_res;
+    mem->jac = _theta_sdirk4_jac;
+    mem->init = _theta_sdirk4_guess;
+    _theta_sdirk4_guess(NV_DATA_S(mem->th0));
+    _theta_sdirk4_guess(NV_DATA_S(mem->thcur));
     break;
   default: return SUNBRAID_ILLINPUT;
   }

@@ -70,6 +70,8 @@ struct _ARKBraidNlsMem
   SUNLinearSolver LS;
   void (*res)(sunrealtype *r, const realtype *th, const realtype *rhs);
   void (*jac)(sunrealtype *J, const realtype *th);
+  void (*init)(sunrealtype *th);
+  int (*alt_init)(sunrealtype *th, const sunindextype resets);
 };
 
 typedef struct _ARKBraidNlsMem *ARKBraidNlsMem;

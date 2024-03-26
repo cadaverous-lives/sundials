@@ -60,6 +60,8 @@
 #include "nvector/nvector_serial.h"    // access to the serial N_Vector
 #include "sunlinsol/sunlinsol_pcg.h"   // access to PCG SUNLinearSolver
 #include "sunlinsol/sunlinsol_spgmr.h" // access to SPGMR SUNLinearSolver
+#include "sunmatrix/sunmatrix_band.h"  // access to banded SUNMatrix
+#include "sunlinsol/sunlinsol_band.h"  // access to direct solver for banded SUNMatrix
 #include "mpi.h"                       // MPI header file
 #include "braid.h"                     // access to XBraid
 #include "arkode/arkode_xbraid.h"      // access to ARKStep + XBraid interface
@@ -131,12 +133,14 @@ struct UserData
   bool     diagnostics; // output diagnostics
 
   // Linear solver and preconditioner settings
-  bool     pcg;       // use PCG (true) or GMRES (false)
+  bool     pcg;       // use PCG (true) or banded LU (false)
+  bool     gmres;     // use gmres (true) or banded LU (false)
   bool     prec;      // preconditioner on/off
   bool     lsinfo;    // output residual history
   int      liniters;  // number of linear iterations
   int      msbp;      // max number of steps between preconditioner setups
   realtype epslin;    // linear solver tolerance factor
+  SUNMatrix A;        // banded matrix defining system rhs
 
   // Inverse of Jacobian diagonal for preconditioner
   N_Vector d;
@@ -147,6 +151,7 @@ struct UserData
   ofstream uout;   // output file stream
   ofstream eout;   // error file stream
   N_Vector e;      // error vector
+  realtype emax;   // max error
 
   // Timing variables
   bool   timing;     // print timings
@@ -197,7 +202,6 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus);
 static int f(realtype t, N_Vector u, N_Vector f, void *user_data);
 
 // Preconditioner setup and solve functions
-// TODO: replace with HYPRE solver
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
                   booleantype *jcurPtr, realtype gamma, void *user_data);
 
@@ -361,7 +365,7 @@ int main(int argc, char* argv[])
       if (check_flag(&flag, "SUNLinSolSetInfoFile_PCG", 1)) return(1);
     }
   }
-  else
+  else if (udata->gmres)
   {
     LS = SUNLinSol_SPGMR(u, prectype, udata->liniters, ctx);
     if (check_flag((void *) LS, "SUNLinSol_SPGMR", 0)) return 1;
@@ -605,18 +609,63 @@ int main(int argc, char* argv[])
   // "Loop" over time
   // -----------------
 
-  // Start timer
-  t1 = chrono::steady_clock::now();
+  if (udata->x_max_levels > 1)
+  {
+    // Start timer
+    t1 = chrono::steady_clock::now();
 
-  // Evolve in time
-  flag = braid_Drive(core);
-  if (check_flag(&flag, "braid_Drive", 1)) return 1;
+    // Evolve in time
+    flag = braid_Drive(core);
+    if (check_flag(&flag, "braid_Drive", 1)) return 1;
 
-  // Stop timer
-  t2 = chrono::steady_clock::now();
+    // Stop timer
+    t2 = chrono::steady_clock::now();
 
-  // Update timer
-  udata->evolvetime += chrono::duration<double>(t2 - t1).count();
+    // Update timer
+    udata->evolvetime += chrono::duration<double>(t2 - t1).count();
+  }
+  else
+  {
+    realtype t     = ZERO;
+    realtype dTout = udata->tf / udata->nout;
+    realtype tout  = dTout;
+
+    // Inital output
+    // flag = OpenOutput(udata);
+    // if (check_flag(&flag, "OpenOutput", 1)) return 1;
+
+    // flag = WriteOutput(t, u, udata);
+    // if (check_flag(&flag, "WriteOutput", 1)) return 1;
+
+    for (int iout = 0; iout < udata->nout; iout++)
+    {
+      // Start timer
+      t1 = chrono::steady_clock::now();
+
+      // Evolve in time
+      flag = ARKStepEvolve(arkode_mem, tout, u, &t, ARK_NORMAL);
+      if (check_flag(&flag, "ARKStepEvolve", 1)) break;
+
+      // Stop timer
+      t2 = chrono::steady_clock::now();
+
+      // Update timer
+      udata->evolvetime += chrono::duration<double>(t2 - t1).count();
+
+      // Output solution and error
+      // flag = WriteOutput(t, u, udata);
+      // if (check_flag(&flag, "WriteOutput", 1)) return 1;
+
+      // Update output time
+      tout += dTout;
+      tout = (tout > udata->tf) ? udata->tf : tout;
+    }
+
+    // Close output
+    // flag = CloseOutput(udata);
+    // if (check_flag(&flag, "CloseOutput", 1)) return 1;
+  }
+
 
   // --------------
   // Final outputs
@@ -804,19 +853,16 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
       }
     }
 
-    // Output final error
-    if (index == ntpts)
+    // Compute the max error
+    flag = SolutionError(t, y, udata->e, udata);
+    if (check_flag(&flag, "SolutionError", 1)) return 1;
+
+    realtype step_maxerr = N_VMaxNorm(udata->e);
+    if (step_maxerr > udata->emax)
     {
-      // Compute the max error
-      flag = SolutionError(t, y, udata->e, udata);
-      if (check_flag(&flag, "SolutionError", 1)) return 1;
-
-      realtype maxerr = N_VMaxNorm(udata->e);
-
-      cout << scientific;
-      cout << setprecision(numeric_limits<realtype>::digits10);
-      cout << "  Max error = " << maxerr << endl << endl;
+      udata -> emax = step_maxerr;
     }
+
   }
 
   // Stop timer
@@ -855,8 +901,6 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   realtype cc = -30*(cx + cy);
   
   // Constants for computing advection term
-  realtype axy = sqrt(udata->ax*udata->ax + udata->ay*udata->ay);
-  realtype caxy = axy / sqrt(udata->dx*udata->dx + udata->dy*udata->dy);
   realtype cax = udata->ax / udata->dx;
   realtype cay = udata->ay / udata->dy;
 
@@ -952,46 +996,34 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   // }
 
   // third order upwinding for advection (letting outside values = 0)
+  // {-1/3, -1/2, 1, -1/6}
   for (sunindextype j = 1; j < ny - 1; j++)
   {
     for (sunindextype i = 1; i < nx - 1; i++)
     {
-      if (i < nx - 2)
-      {
-        farray[IDX(i,j,nx)] += 
-          cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i+2,j,nx)]/6 - uarray[IDX(i-1,j,nx)]/3) - cax * uarray[IDX(i,j,nx)]/2;
-      }
-      else
-      {
-        farray[IDX(i,j,nx)] += 
-          cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i-1,j,nx)]/3) - cax * uarray[IDX(i,j,nx)]/2;
-      }
-      if (j < ny - 2)
-      {
-        farray[IDX(i,j,nx)] += 
-          cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j+2,nx)]/6 - uarray[IDX(i,j-1,nx)]/3) - cay * uarray[IDX(i,j,nx)]/2;
-      }
-      else
-      {
-        farray[IDX(i,j,nx)] += 
-          cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j-1,nx)]/3) - cay * uarray[IDX(i,j,nx)]/2;
-      }
-      // if ((j < ny - 2) && (i < nx - 2))
-      // {
-      //   farray[IDX(i,j,nx)] += 
-      //       cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i+2,j,nx)]/6 - uarray[IDX(i-1,j,nx)]/3)
-      //     + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j+2,nx)]/6 - uarray[IDX(i,j-1,nx)]/3)
-      //     - (cax + cay) * uarray[IDX(i,j,nx)]/2;
-      // }
-      // else
-      // {
-      //   farray[IDX(i,j,nx)] += 
-      //       cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i-1,j,nx)]/3)
-      //     + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j-1,nx)]/3)
-      //     - (cax + cay) * uarray[IDX(i,j,nx)]/2;
-      // }
+      farray[IDX(i,j,nx)] += cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i-1,j,nx)]/3)
+                           + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i,j-1,nx)]/3);
+      if (i < nx - 2) {farray[IDX(i,j,nx)] -= cax * uarray[IDX(i+2,j,nx)]/6;}
+      if (j < ny - 2) {farray[IDX(i,j,nx)] -= cay * uarray[IDX(i,j+2,nx)]/6;}
     }
   }
+
+  // fifth order upwinding
+  // {1/20, -1/2, -1/3, 1, -1/4, 1/30}
+  // for (sunindextype j = 1; j < ny - 1; j++)
+  // {
+  //   for (sunindextype i = 1; i < nx - 1; i++)
+  //   {
+  //     farray[IDX(i,j,nx)] += cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i,j,nx)]/3 - uarray[IDX(i-1,j,nx)]/2)
+  //                          + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j,nx)]/3 - uarray[IDX(i,j-1,nx)]/2);
+  //     if (i < nx - 3) {farray[IDX(i,j,nx)] += cax * uarray[IDX(i+3,j,nx)]/30;}
+  //     if (i < nx - 2) {farray[IDX(i,j,nx)] -= cax * uarray[IDX(i+2,j,nx)]/4;}
+  //     if (i > 1)      {farray[IDX(i,j,nx)] += cax * uarray[IDX(i-2,j,nx)]/20;}
+  //     if (j < ny - 3) {farray[IDX(i,j,nx)] += cay * uarray[IDX(i,j+3,nx)]/30;}
+  //     if (j < ny - 2) {farray[IDX(i,j,nx)] -= cay * uarray[IDX(i,j+2,nx)]/4;}
+  //     if (j > 1)      {farray[IDX(i,j,nx)] += cay * uarray[IDX(i,j-2,nx)]/20;}
+  //   }
+  // }
 
   // Stop timer
   t2 = chrono::steady_clock::now();
@@ -1024,7 +1056,12 @@ static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
   // Constants for computing diffusion
   realtype cx = udata->kx / (udata->dx * udata->dx);
   realtype cy = udata->ky / (udata->dy * udata->dy);
-  realtype cc = -TWO * (cx + cy);
+
+  // Constants for computing advection
+  realtype cax = udata->ax / udata->dx;
+  realtype cay = udata->ay / udata->dy;
+
+  realtype cc = -5 * (cx + cy)/2 - (cax + cay)/3;
 
   // Set all entries of d to the inverse diagonal values of interior
   // (since boundary RHS is 0, set boundary diagonals to the same)
@@ -1084,8 +1121,8 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->ky = ONE;
 
   // Advection coefficient
-  udata->ax = ZERO;
-  udata->ay = ZERO;
+  udata->ax = ONE;
+  udata->ay = ONE;
 
   // Enable forcing
   udata->forcing = true;
@@ -1112,19 +1149,21 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->nprocs_w = 1;
 
   // Integrator settings
-  udata->rtol        = RCONST(1.e-2);   // relative tolerance
-  udata->atol        = RCONST(1.e-10);  // absolute tolerance
+  udata->rtol        = RCONST(1.e-4);   // relative tolerance
+  udata->atol        = RCONST(1.e-4);  // absolute tolerance
   udata->order       = 2;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
 
   // Linear solver and preconditioner options
-  udata->pcg       = false;       // use PCG (true) or GMRES (false)
+  udata->pcg       = false;      // use PCG (true) or bandedlu (false)
+  udata->gmres     = true;       // use gmres (true) or bandedlu (false)
   udata->prec      = true;       // enable preconditioning
   udata->lsinfo    = false;      // output residual history
-  udata->liniters  = 100;        // max linear iterations
+  udata->liniters  = 200;        // max linear iterations
   udata->msbp      = 0;          // use default (20 steps)
   udata->epslin    = ZERO;       // use default (0.05)
+  udata->A         = NULL;       // spatial system matrix
 
   // Inverse of Jacobian diagonal for preconditioner
   udata->d = NULL;
@@ -1133,6 +1172,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->output = 1;   // 0 = no output, 1 = stats output, 2 = output to disk
   udata->nout   = 20;  // Number of output times
   udata->e      = NULL;
+  udata->emax   = 0;
 
   // Timing variables
   udata->timing     = false;
@@ -1143,14 +1183,14 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->accesstime = 0.0;
 
   // Xbraid
-  udata->x_tol           = 1.0e-6;
-  udata->x_nt            = 300;
+  udata->x_tol           = 1.0e-4;
+  udata->x_nt            = 64;
   udata->x_skip          = 0;
   udata->x_max_levels    = 16;
   udata->x_min_coarse    = 3;
   udata->x_nrelax        = 1;
   udata->x_nrelax0       = -1;
-  udata->x_tnorm         = 2;
+  udata->x_tnorm         = 3;
   udata->x_cfactor       = 4;
   udata->x_cfactor0      = -1;
   udata->x_max_iter      = 100;
@@ -1186,6 +1226,12 @@ static int FreeUserData(UserData *udata)
   {
     N_VDestroy(udata->e);
     udata->e = NULL;
+  }
+
+  if (udata->A)
+  {
+    SUNMatDestroy(udata->A);
+    udata->A = NULL;
   }
 
   // Return success
@@ -1267,6 +1313,7 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     else if (arg == "--pcg")
     {
       udata->pcg = true;
+      udata->gmres = false;
     }
     else if (arg == "--lsinfo")
     {
@@ -1494,7 +1541,7 @@ static void InputHelp()
   cout << "  --noforcing             : disable forcing term" << endl;
   cout << "  --tf <time>             : final time" << endl;
   cout << "  --rtol <rtol>           : relative tolerance" << endl;
-  cout << "  --atol <atol>           : absoltue tolerance" << endl;
+  cout << "  --atol <atol>           : absolute tolerance" << endl;
   cout << "  --nonlinear             : disable linearly implicit flag" << endl;
   cout << "  --order <ord>           : method order" << endl;
   cout << "  --diagnostics           : output diagnostics" << endl;
@@ -1632,9 +1679,14 @@ static int OutputStats(void *arkode_mem, UserData* udata)
   MPI_Allreduce(MPI_IN_PLACE, &nsetups, 1, MPI_LONG, MPI_MAX, udata->comm_w);
   MPI_Allreduce(MPI_IN_PLACE, &nfi_ls,  1, MPI_LONG, MPI_MAX, udata->comm_w);
   MPI_Allreduce(MPI_IN_PLACE, &nJv,     1, MPI_LONG, MPI_MAX, udata->comm_w);
+  MPI_Allreduce(MPI_IN_PLACE, &udata->emax, 1, MPI_DOUBLE, MPI_MAX, udata->comm_w);
 
   if (outproc)
   {
+    cout << scientific;
+    cout << setprecision(numeric_limits<realtype>::digits10);
+    cout << "  Max error = " << udata->emax << endl << endl;
+
     cout << fixed;
     cout << setprecision(6);
 
@@ -1698,14 +1750,14 @@ static int OutputTiming(UserData *udata)
              udata->comm_w);
   if (outproc)
   {
-    cout << "  Evolve time   = " << maxtime << " sec" << endl;
+    cout << "  Evolve time   = " << maxtime  << endl;
   }
 
   MPI_Reduce(&(udata->rhstime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
              udata->comm_w);
   if (outproc)
   {
-    cout << "  RHS time      = " << maxtime << " sec" << endl;
+    cout << "  RHS time      = " << maxtime  << endl;
   }
 
   if (udata->prec)
@@ -1714,14 +1766,14 @@ static int OutputTiming(UserData *udata)
                udata->comm_w);
     if (outproc)
     {
-      cout << "  PSetup time   = " << maxtime << " sec" << endl;
+      cout << "  PSetup time   = " << maxtime  << endl;
     }
 
     MPI_Reduce(&(udata->psolvetime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
                udata->comm_w);
     if (outproc)
     {
-      cout << "  PSolve time   = " << maxtime << " sec" << endl;
+      cout << "  PSolve time   = " << maxtime  << endl;
       cout << endl;
     }
   }

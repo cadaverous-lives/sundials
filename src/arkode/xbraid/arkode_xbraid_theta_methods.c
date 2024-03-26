@@ -187,6 +187,33 @@ void _theta_sdirk3_guess(sunrealtype* guess)
   guess[2] = RCONST(-0.6443631706532353);
 }
 
+int _theta_sdirk3_altguess(sunrealtype* guess, sunindextype resets)
+{
+  int flag;
+  switch (resets)
+  {
+  case 0:
+    // rhs: 0.500000, 0.375000, 0.125000
+    _theta_sdirk3_guess(guess);
+    flag = SUNTRUE;
+    break;
+
+  case 1:
+    // rhs: 0.500000, 0.375000, 0.125000
+    guess[0] = RCONST(0.104356);
+    guess[1] = RCONST(0.896898);
+    guess[2] = RCONST(0.381277);
+    flag = SUNTRUE;
+    break;
+  
+  default:
+    _theta_sdirk3_guess(guess);
+    flag = SUNFALSE;
+    break;
+  }
+  return flag;
+}
+
 /* theta_qesdirk4 */
 
 void _theta_qesdirk4_res(sunrealtype* phi, const sunrealtype* th, const sunrealtype* rhs)

@@ -352,20 +352,20 @@ int ARKBraid_GetSolution(braid_App app, realtype* tout, N_Vector yout)
 int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
                   braid_Vector u, braid_StepStatus status)
 {
-  braid_Int braid_flag;              /* braid function return flag       */
-  int ark_flag;                      /* arkode step return flag          */
-  int flag;                          /* arkode function return flag      */
-  int level;                         /* current level                    */
-  int rfac;                          /* refinement factor                */
-  int fixedstep;                     /* flag for fixed step size         */
-  realtype tstart;                   /* current time                     */
-  realtype tstop;                    /* evolve to this time              */
-  realtype hacc;                     /* accuracy based step size         */
-  ARKBraidContent content;           /* ARKBraid app content             */
+  braid_Int braid_flag;              /* braid function return flag  */
+  int ark_flag;                      /* arkode step return flag     */
+  int flag;                          /* arkode function return flag */
+  int level;                         /* current level               */
+  int rfac;                          /* refinement factor           */
+  int fixedstep;                     /* flag for fixed step size    */
+  int iter;                          /* MGRIT iteration             */
+  realtype tstart;                   /* current time                */
+  realtype tstop;                    /* evolve to this time         */
+  realtype hacc;                     /* accuracy based step size    */
+  ARKBraidContent content;           /* ARKBraid app content        */
 
   ARKodeButcherTable B       = NULL; /* Butcher table for the step  */
-  ARKBraidThetaVecData vdata = NULL; /* vector data for storing order conditions
-                                      */
+  ARKBraidThetaVecData vdata = NULL; /* vector data for storing order conditions */
 
   /* Check input */
   if (app == NULL || status == NULL) return SUNBRAID_ILLINPUT;
@@ -382,8 +382,9 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Get info from XBraid */
   braid_flag = braid_StepStatusGetTstartTstop(status, &tstart, &tstop);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
-
   braid_flag = braid_StepStatusGetLevel(status, &level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+  braid_flag = braid_StepStatusGetIter(status, &iter);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
   /* Compute theta method order conditions */
@@ -392,6 +393,10 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Turn off error estimation on coarse grids */
   if (!fixedstep && level > 0)
     arkSetFixedStep(content->ark_mem, tstop - tstart);
+
+  // TODO: set solver tolerance based on MGRIT residual
+  // TODO: use u_stop to form initial guess for stage values
+  // TODO: store stage values at each point to form initial guess
 
   /* Finally propagate the solution */
   // if (level == 0)
@@ -411,8 +416,9 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Refine grid (XBraid will ignore if refinement is disabled) */
 
   /* Compute refinement factor */
-  if (braid_StepStatusAcceptsRFactor(status))
+  if (iter > 0 && braid_StepStatusAcceptsRFactor(status))
   {
+    // TODO: only refine when residual sufficiently small?
     /* Default to no refinement */
     rfac = 1;
 
