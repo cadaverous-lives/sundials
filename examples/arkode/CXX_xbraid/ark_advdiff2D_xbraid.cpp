@@ -399,6 +399,10 @@ int main(int argc, char* argv[])
   flag = ARKStepSStolerances(arkode_mem, udata->rtol, udata->atol);
   if (check_flag(&flag, "ARKStepSStolerances", 1)) return 1;
 
+  // Set max number of steps
+  flag = ARKStepSetMaxNumSteps(arkode_mem, 10000);
+  if (check_flag(&flag, "ARKStepSetMaxNumSteps", 1)) return 1;
+
   // Attach user data
   flag = ARKStepSetUserData(arkode_mem, (void *) udata);
   if (check_flag(&flag, "ARKStepSetUserData", 1)) return 1;
