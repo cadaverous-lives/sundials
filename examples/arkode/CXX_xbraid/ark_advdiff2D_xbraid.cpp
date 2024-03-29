@@ -1,5 +1,5 @@
 /* -----------------------------------------------------------------------------
- * Programmer(s): David J. Gardner @ LLNL, David A. Vargas @ UNM
+ * Programmer(s): David A. Vargas @ UNM and David J. Gardner @ LLNL
  * -----------------------------------------------------------------------------
  * SUNDIALS Copyright Start
  * Copyright (c) 2002-2023, Lawrence Livermore National Security
@@ -37,12 +37,12 @@
  *
  *    u(t,x,y) = sin^2(pi x) sin^2(pi y) sin^6(pi t).
  *
- * The second spatial derivatives are computed using second-order centered differences,
+ * The second spatial derivatives are computed using fourth-order centered differences,
  * the advection terms are computed using third order upwind differences,
  * with the data distributed over nx * ny points on a uniform spatial grid. The
  * problem is solved using the XBraid multigrid reduction in time library paired
- * with a diagonally implicit Runge-Kutta method from the ARKODE ARKStep module
- * using ??? TODO: add method name ???.
+ * with a diagonally implicit Runge-Kutta method from the ARKODE ARKStep module,
+ * utilizing adaptively generated coarse-grid DIRK theta methods.
  * Several command line options are available to change the problem parameters
  * and ARKStep settings. Use the flag --help for more information.
  * ---------------------------------------------------------------------------*/
@@ -60,8 +60,6 @@
 #include "nvector/nvector_serial.h"    // access to the serial N_Vector
 #include "sunlinsol/sunlinsol_pcg.h"   // access to PCG SUNLinearSolver
 #include "sunlinsol/sunlinsol_spgmr.h" // access to SPGMR SUNLinearSolver
-#include "sunmatrix/sunmatrix_band.h"  // access to banded SUNMatrix
-#include "sunlinsol/sunlinsol_band.h"  // access to direct solver for banded SUNMatrix
 #include "mpi.h"                       // MPI header file
 #include "braid.h"                     // access to XBraid
 #include "arkode/arkode_xbraid.h"      // access to ARKStep + XBraid interface
@@ -140,7 +138,6 @@ struct UserData
   int      liniters;  // number of linear iterations
   int      msbp;      // max number of steps between preconditioner setups
   realtype epslin;    // linear solver tolerance factor
-  SUNMatrix A;        // banded matrix defining system rhs
 
   // Inverse of Jacobian diagonal for preconditioner
   N_Vector d;
@@ -1167,7 +1164,6 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->liniters  = 200;        // max linear iterations
   udata->msbp      = 0;          // use default (20 steps)
   udata->epslin    = ZERO;       // use default (0.05)
-  udata->A         = NULL;       // spatial system matrix
 
   // Inverse of Jacobian diagonal for preconditioner
   udata->d = NULL;
@@ -1230,12 +1226,6 @@ static int FreeUserData(UserData *udata)
   {
     N_VDestroy(udata->e);
     udata->e = NULL;
-  }
-
-  if (udata->A)
-  {
-    SUNMatDestroy(udata->A);
-    udata->A = NULL;
   }
 
   // Return success
