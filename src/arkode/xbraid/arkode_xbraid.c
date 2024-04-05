@@ -79,11 +79,11 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
 
   /* flags for theta method */
   content->flag_refine_downcycle = SUNFALSE;
-  content->flag_skip_downcycle   = SUNTRUE;
+  content->flag_skip_downcycle   = SUNFALSE;
 
   /* Newton solver for theta method order conditions */
   content->NLS = NULL;
-  content->NLS_mem = NULL;
+  content->theta_mem = NULL;
   
   /* Fine and coarse grid method orders */
 
@@ -98,8 +98,9 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
     _ARKBraidTheta_GetNumOrderConditions(content->order_fine,
                                          content->order_coarse);
 
+  content->num_levels_alloc = 0;
+  content->grids          = NULL;
   content->ark_mem_coarse = NULL;
-  content->num_levels     = 0;
   content->num_tables     = NULL;
   content->coarse_btables = NULL;
   content->fine_btable    = NULL;
@@ -138,8 +139,11 @@ int ARKBraid_BraidInit(MPI_Comm comm_w, MPI_Comm comm_t, realtype tstart,
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
 
   /* Set sync function */
-  braid_flag = braid_SetSync(*core, ARKBraidTheta_Sync);
+  braid_flag = braid_SetSync(*core, ARKBraid_Sync);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+
+  /* Set storage */
+  braid_flag = braid_SetStorage(*core, content->storage);
 
   return SUNBRAID_SUCCESS;
 }
@@ -172,9 +176,18 @@ int ARKBraid_Free(braid_App* app)
       ARKodeButcherTable_Free(content->fine_btable);
       content->fine_btable = NULL;
     }
-    _ARKBraidTheta_FreeCGBtables(content);
+    
+    if (content->grids != NULL)
+    {
+      for (int lvl = 0; lvl < content->num_levels_alloc; lvl++)
+      {
+        ARKBraidGridData_Free(&content->grids[lvl]);
+      }
+      free(content->grids);
+      content->grids = NULL;
+    }
 
-    ARKBraidTheta_NlsMem_Free(content->NLS_mem);
+    ARKBraidTheta_NlsMem_Free(content->theta_mem);
     SUNNonlinSolFree(content->NLS);
 
     free((*app)->content);
@@ -187,7 +200,7 @@ int ARKBraid_Free(braid_App* app)
  * ARKBraid Set Functions
  * ---------------------- */
 
-int ARKBraid_SetCoarseOrder(braid_App app, int order)
+int ARKBraid_SetCoarseOrder(braid_App app, sunindextype order)
 {
   ARKBraidContent content;
 
@@ -207,6 +220,20 @@ int ARKBraid_SetCoarseOrder(braid_App app, int order)
   content->num_order_conditions =
     _ARKBraidTheta_GetNumOrderConditions(content->order_fine,
                                          content->order_coarse);
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_SetFullStorage(braid_App app, braid_Int storage, braid_Int stage_storage)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent)app->content;
+  content->storage       = storage;
+  content->stage_storage = stage_storage;
 
   return SUNBRAID_SUCCESS;
 }
@@ -359,13 +386,17 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   int rfac;                          /* refinement factor           */
   int fixedstep;                     /* flag for fixed step size    */
   int iter;                          /* MGRIT iteration             */
+  int iu, il;                        /* lowest and highest time indices on this level    */
+  int ti, tir;                       /* time index and relative time index for this step */
+  int gotzs, gotustop;
   realtype tstart;                   /* current time                */
   realtype tstop;                    /* evolve to this time         */
   realtype hacc;                     /* accuracy based step size    */
   ARKBraidContent content;           /* ARKBraid app content        */
 
-  ARKodeButcherTable B       = NULL; /* Butcher table for the step  */
-  ARKBraidThetaVecData vdata = NULL; /* vector data for storing order conditions */
+  N_Vector *z = NULL; /* stage initial guess */
+  ARKodeARKStepMem step_mem;
+  ARKBraidGridData grid; /* grid data for this step */
 
   /* Check input */
   if (app == NULL || status == NULL) return SUNBRAID_ILLINPUT;
@@ -373,6 +404,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Access app content */
   content = (ARKBraidContent)app->content;
+  step_mem = (ARKodeARKStepMem)content->ark_mem->step_mem;
 
   if (content->ark_mem == NULL) return SUNBRAID_MEMFAIL;
 
@@ -380,38 +412,74 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   fixedstep = (content->ark_mem->fixedstep);
 
   /* Get info from XBraid */
-  braid_flag = braid_StepStatusGetTstartTstop(status, &tstart, &tstop);
-  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
   braid_flag = braid_StepStatusGetLevel(status, &level);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
   braid_flag = braid_StepStatusGetIter(status, &iter);
   CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+  braid_flag = braid_StepStatusGetTstartTstop(status, &tstart, &tstop);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+  braid_flag = braid_StepStatusGetTIndex(status, &ti);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+  braid_flag = braid_StepStatusGetTIUL(status, &iu, &il, level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
+  tir = ti - il + 1; /* relative time index */
 
-  /* Compute theta method order conditions */
+  /* Get Grid storage */
+  grid = content->grids[level];
+
+  /* Compute theta method order conditions and set Butcher table */
   ARKBraidTheta_StepElemWeights(content, status, u);
+
+  // TODO: set solver tolerance based on MGRIT residual/level
+
+  /* Get stored stage initial guess if available */
+  if (grid->stage_zs)
+  {
+    /* This allows using stored intermediate stage values 
+    from previous calls to step at this time index */
+    /* ARKODE will allocate this even if it is NULL */
+    flag = arkSetStageZs((void*)content->ark_mem, grid->stage_zs[tir], grid->num_stages[tir]);
+    if (flag != ARK_SUCCESS) return flag;
+
+    flag = arkSetFullStorage((void*)content->ark_mem, SUNTRUE);
+    if (flag != ARK_SUCCESS) return flag;
+  }
+  gotzs    = (grid->num_stages != NULL && grid->num_stages[tir] > 0);
+  gotustop = (u != ustop);
 
   /* Turn off error estimation on coarse grids */
   if (!fixedstep && level > 0)
     arkSetFixedStep(content->ark_mem, tstop - tstart);
 
-  // TODO: set solver tolerance based on MGRIT residual
-  // TODO: use u_stop to form initial guess for stage values
-  // TODO: store stage values at each point to form initial guess
+  /* Get number of linear iterations the step took */
+  int liters_start, liters_stop;
+  ARKLsMem lsmem;
+  lsmem = (ARKLsMem)content->ark_mem->step_getlinmem((void*)content->ark_mem);
+
+  liters_start = lsmem->nli;
 
   /* Finally propagate the solution */
   // if (level == 0)
-  flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y,
-                           &ark_flag);
+  flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y, ustop->y, &ark_flag);
   // else
   //   flag = ARKBraid_TakeStep((void*)(content->ark_mem_coarse), tstart, tstop,
   //                            u->y, &ark_flag);
 
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
+  liters_stop = lsmem->nli;
+  // printf("Level: %d, ti: %d, ustop: %d, z: %d, liters: %d\n", level, ti, gotustop, gotzs, liters_stop-liters_start);
+
   /* Restore fixedstep value */
   if (!fixedstep && level > 0)
     /* Setting zero here turns adaptivity back on */
     arkSetFixedStep(content->ark_mem, ZERO);
+
+  /* Retrieve updated intermediate stages */
+  if (grid->stage_zs)
+  {
+    arkGetStageZs(content->ark_mem, &grid->stage_zs[tir], &grid->num_stages[tir]);
+  }
 
   /* Refine grid (XBraid will ignore if refinement is disabled) */
 
@@ -438,6 +506,8 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
     }
 
     /* set the refinement factor */
+    // if (rfac > 1)
+    //   printf("Refine: ti: %d, rfactor=%d\n", ti, rfac);
     braid_flag = braid_StepStatusSetRFactor(status, rfac);
     CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
   }
@@ -450,8 +520,8 @@ int ARKBraid_Init(braid_App app, realtype t, braid_Vector* u_ptr)
 {
   int flag;                   /* return flag          */
   N_Vector y;                 /* output N_Vector      */
-  ARKBraidThetaVecData vdata; /* output ARKBraid vector data (used for Theta
-                                 method) */
+  ARKBraidThetaVecData vdata; /* output ARKBraid vector data 
+                                 (used for Theta method) */
   ARKBraidContent content;    /* ARKBraid app content */
 
   /* Check input */
@@ -534,13 +604,130 @@ int ARKBraid_Access(braid_App app, braid_Vector u, braid_AccessStatus astatus)
   return SUNBRAID_SUCCESS;
 }
 
+int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
+{
+  int flag;           /* return flag          */
+  int caller;         /* XBraid calling function */
+  int level, nlevels; /* XBraid level, number of levels */
+  int skip;           /* XBraid skip option */
+  int iter;           /* XBraid iteration */
+  int proc;           /* ID of current proc */
+  int iu, il;         /* upper and lower time-indices on this proc */
+  int ntpoints;       /* XBraid number of time points */
+  ARKBraidContent content; /* ARKBraid app content */
+  ARKodeARKStepMem step_mem; /* ARKStep memory */
+  ARKBraidGridData grid;
+
+  /* Check input */
+
+  if (app == NULL || sstatus == NULL) return SUNBRAID_ILLINPUT;
+
+  /* Access app content */
+  content = (ARKBraidContent)app->content;
+
+  /* Store the fine-grid butcher table */
+  if (content->fine_btable == NULL)
+  {
+    /* Get the ARKStep memory */
+    step_mem = (ARKodeARKStepMem)content->ark_mem->step_mem;
+
+    if ((step_mem->Be == NULL) && (step_mem->Bi == NULL))
+    {
+      /* Initialize arkode_mem so that there is a valid Butcher table */
+      flag = arkStep_SetButcherTables(content->ark_mem);
+      CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+    }
+
+    /* TODO: support for ImEx methods */
+    /* Get the fine-grid butcher table */
+    if (step_mem->Be != NULL)
+      content->fine_btable = ARKodeButcherTable_Copy(step_mem->Be);
+    else if (step_mem->Bi != NULL)
+      content->fine_btable = ARKodeButcherTable_Copy(step_mem->Bi);
+    else return SUNBRAID_ILLINPUT;
+  }
+
+  /* Get information from XBraid status */
+  flag = braid_SyncStatusGetCallingFunction(sstatus, &caller);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetSkip(sstatus, &skip);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetLevel(sstatus, &level);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetNLevels(sstatus, &nlevels);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetIter(sstatus, &iter);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  flag = braid_SyncStatusGetTIUL(sstatus, &iu, &il, 0);
+  CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+  
+  /* proc 0 will own the zero time index (il == 0) */
+  proc = il;
+
+  /* Check if this is a new hierarchy */
+  if (caller == braid_ASCaller_Drive_AfterInit ||
+      caller == braid_ASCaller_FRefine_AfterInitHier)
+  {
+    /* Destroy old grid data */
+    if (content->grids)
+    {
+      for (int lvl = 0; lvl < content->num_levels_alloc; lvl++)
+      {
+        ARKBraidGridData_Free(&content->grids[lvl]);
+      }
+    }
+
+    /* Store new number of levels */
+    content->num_levels_alloc = nlevels;
+
+    /* Allocate new grid data objects */
+    content->grids = (ARKBraidGridData*)realloc(content->grids, nlevels * sizeof(ARKBraidGridData));
+    if (content->grids == NULL) return SUNBRAID_ALLOCFAIL;
+
+    /* Initialize grid data storage */
+    for (int lvl = 0; lvl < nlevels; lvl++)
+    {
+      content->grids[lvl] = NULL;
+
+      flag = braid_SyncStatusGetTIUL(sstatus, &iu, &il, lvl);
+      CHECK_BRAID_RETURN(content->last_flag_braid, flag);
+      ntpoints = iu - il + 1;
+
+      flag = ARKBraidGridData_Create(lvl, ntpoints, &content->grids[lvl]);
+      if (flag != SUNBRAID_SUCCESS) return flag;
+
+      /* Allocate stage storage */
+      if (content->stage_storage)
+      {
+        grid = content->grids[lvl];
+        grid->stage_zs = (N_Vector**)calloc(ntpoints, sizeof(N_Vector*));
+        if (grid->stage_zs == NULL) return SUNBRAID_ALLOCFAIL;
+        grid->num_stages = (sunindextype*)calloc(ntpoints, sizeof(sunindextype));
+        if (grid->num_stages == NULL) return SUNBRAID_ALLOCFAIL;
+      }
+    }
+
+    /* Check that theta method needs computing */
+    if (nlevels > 1 && content->order_coarse > content->order_fine)
+    {
+      /* Set flag if the first down-cycle will be skipped */
+      content->flag_skip_downcycle = (skip && caller == braid_ASCaller_Drive_AfterInit);
+
+      /* Initialize coarse grid theta method Butcher tables */
+      flag = ARKBraidTheta_InitHierarchy(app, sstatus);
+      if (flag != SUNBRAID_SUCCESS) return flag;
+    }
+  }
+  return SUNBRAID_SUCCESS;
+}
+
 /* -----------------
  * Utility Functions
  * ----------------- */
 
 /* Force a single step with ARKEvolve */
 int ARKBraid_TakeStep(void* arkode_mem, realtype tstart, realtype tstop,
-                      N_Vector y, int* ark_flag)
+                      N_Vector y, N_Vector ystop, int* ark_flag)
 {
   int flag;      /* generic return flag      */
   int tmp_flag;  /* evolve return flag       */
@@ -562,11 +749,22 @@ int ARKBraid_TakeStep(void* arkode_mem, realtype tstart, realtype tstop,
   flag = arkSetForcePass(arkode_mem, SUNTRUE);
   if (flag != ARK_SUCCESS) return flag;
 
+  /* Set improved initial guess, if available */
+  if (ystop != y)
+  {
+    /* This allows linear/cubic hermite interpolation */
+    flag = ARKStepSetStepGuess(arkode_mem, tstop, ystop);
+    if (flag != ARK_SUCCESS && flag != ARK_ILL_INPUT) return flag;
+  }
+
   /* Take step, check flag below */
   tmp_flag = ARKStepEvolve(arkode_mem, tstop, y, &tret, ARK_ONE_STEP);
 
   /* Re-enable temporal error test check */
   flag = arkSetForcePass(arkode_mem, SUNFALSE);
+  if (flag != ARK_SUCCESS) return flag;
+
+  flag = arkSetFullStorage(arkode_mem, SUNFALSE);
   if (flag != ARK_SUCCESS) return flag;
 
   /* Check if evolve call failed */
@@ -589,4 +787,65 @@ int ARKBraid_TakeStep(void* arkode_mem, realtype tstart, realtype tstop,
   /* Step was successful and passed the error test */
   *ark_flag = STEP_SUCCESS;
   return ARK_SUCCESS;
+}
+
+int ARKBraidGridData_Create(braid_Int level, braid_Int ntpoints, ARKBraidGridData *grid_ptr)
+{
+  ARKBraidGridData grid;
+  braid_Int        iu, il;
+
+  grid = (ARKBraidGridData)malloc(sizeof(*grid));
+  if (grid == NULL) return SUNBRAID_ALLOCFAIL;
+
+  grid->level            = level;
+  grid->num_steps_stored = ntpoints;
+  grid->num_stages       = NULL;
+  grid->stage_zs         = NULL;
+  grid->coarse_btables   = NULL;
+
+  *grid_ptr = grid;
+
+  return SUNBRAID_SUCCESS;
+}
+
+/* Free allocations for stage values and coarse-grid Butcher tables */
+int ARKBraidGridData_Free(ARKBraidGridData *grid_ptr)
+{
+  ARKBraidGridData grid = *grid_ptr; 
+
+  /* Check input */
+  if (grid == NULL) return SUNBRAID_SUCCESS;
+
+  if (grid->coarse_btables != NULL)
+  {
+      for (int i = 0; i < grid->num_steps_stored; i++)
+      {
+        ARKodeButcherTable_Free(grid->coarse_btables[i]);
+      }
+      free(grid->coarse_btables);
+      grid->coarse_btables = NULL;
+  }
+
+  /* Destroy stored stage values */
+  if (grid->stage_zs)
+  {
+      for (int step = 0; step < grid->num_steps_stored; step++)
+      {
+        if (grid->stage_zs[step] == NULL) continue;
+        for (int is = 0; is < grid->num_stages[step]; is++)
+        {
+          N_VDestroy(grid->stage_zs[step][is]);
+        }
+        free(grid->stage_zs[step]);
+        grid->stage_zs[step] = NULL;
+      }
+    free(grid->stage_zs);
+    free(grid->num_stages);
+    grid->stage_zs   = NULL;
+    grid->num_stages = NULL;
+  }
+  free(grid);
+  *grid_ptr = NULL;
+
+  return SUNBRAID_SUCCESS;
 }

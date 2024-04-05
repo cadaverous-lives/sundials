@@ -55,11 +55,31 @@ extern "C" {
  * ------------------------ */
 
 
-/* Define ARKBraidNlsData, stores nonlinear solver data */
-struct _ARKBraidNlsMem
+/* Define ARKBraidThetaOrdCondsMem, 
+stores nonlinear solver data for theta order conditions */
+
+struct _ARKBraidThetaOrdCondsMem
 {
   int      order;
   int      nconds;
+  int      nstages;
+
+  /* Functions defining the butcher table */
+  void (*init)(sunrealtype *th);
+  int  (*alt_init)(sunrealtype *th, const sunindextype resets);
+  void (*btable_A)(sunrealtype *A, const sunrealtype *th);
+  void (*btable_b)(sunrealtype *b, const sunrealtype *th);
+  void (*btable_c)(sunrealtype *c, const sunrealtype *th);
+
+  /* Residual and Jacobian functions for order conditions solver */
+  void (*res)(sunrealtype *r, const realtype *th, const realtype *rhs);
+  void (*jac)(sunrealtype *J, const realtype *th);
+
+  /* Workspace variables for computing order conditions */
+  realtype *phi1;
+  realtype *phi2;
+
+  /* Workspace variables for nonlinear solver */
   N_Vector rhs;
   N_Vector th0;
   N_Vector thcur;
@@ -68,13 +88,33 @@ struct _ARKBraidNlsMem
   N_Vector x;
   SUNMatrix J;
   SUNLinearSolver LS;
-  void (*res)(sunrealtype *r, const realtype *th, const realtype *rhs);
-  void (*jac)(sunrealtype *J, const realtype *th);
-  void (*init)(sunrealtype *th);
-  int (*alt_init)(sunrealtype *th, const sunindextype resets);
 };
 
-typedef struct _ARKBraidNlsMem *ARKBraidNlsMem;
+typedef struct _ARKBraidThetaOrdCondsMem *ARKBraidThetaOrdCondsMem;
+
+
+/* This stores time-dependent but local information for a particular 
+ * level of the MGRIT hierarchy. Data contained here is not communicated
+ * between processors.
+ */
+struct _ARKBraidGridData
+{
+  int level;
+  int num_steps_stored;
+
+  /* Storage for improved initial guesses for stage values */
+  N_Vector **stage_zs;   /* stage values stored per step */
+  int       *num_stages; /* */
+
+  /* Storage for coarse grid theta method Butcher tables */
+  ARKodeButcherTable *coarse_btables;
+  
+};
+
+typedef struct _ARKBraidGridData *ARKBraidGridData;
+
+int ARKBraidGridData_Create(braid_Int level, braid_Int ntpoints, ARKBraidGridData *grid_ptr);
+int ARKBraidGridData_Free(ARKBraidGridData *grid_ptr);
 
 
 /* ------------------------------
@@ -91,6 +131,13 @@ struct _ARKBraidContent
   /* Options */
   int rfac_limit;  /* refinement factor limit           */
   int rfac_fail;   /* refinement factor for failed step */
+  int storage;               /* storage level: 
+                               (enables improved initial guess for implicit stages)
+                               -1: minimum storage, only C-points 
+                                0: full storage on all levels
+                           x >= 1: full storage on all levels >= 1 */
+  booleantype stage_storage; /* if true, stage values will also be stored for all steps 
+                                on all levels where full storage is set */
 
   /* Functions provided to XBraid (user may override) */
   braid_PtFcnStep        step;    /* take time step       */
@@ -102,7 +149,23 @@ struct _ARKBraidContent
   braid_Int last_flag_braid;
   int       last_flag_arkode;
 
-  /* flags for theta method */
+  /* Current number of levels in MGRIT hierarchy */
+  int  num_levels_alloc;
+  int *num_steps_stored; /* number of steps per level which are stored */
+
+  /* Grid data storage */
+  ARKBraidGridData *grids;
+
+  /* Storage for implicit stage values on each level */
+  int       **num_stages;       /* number of stages stored per step on each level */
+  N_Vector ***stage_zs;         /* storage for stage values */
+
+  /* Butcher tables */
+  int *num_tables;  /* number of Butcher tables for each level */
+  ARKodeButcherTable **coarse_btables; /* array of Butcher tables for each level */
+  ARKodeButcherTable fine_btable;
+
+  /* Flags for theta method */
   int flag_refine_downcycle;
   int flag_skip_downcycle;
 
@@ -114,15 +177,9 @@ struct _ARKBraidContent
   /* ARKODE memory for coarse grid */
   ARKodeMem ark_mem_coarse;
 
-  /* Butcher tables */
-  int num_levels;  /* number of levels in MGRIT hierarchy */
-  int *num_tables; /* number of Butcher tables for each level */
-  ARKodeButcherTable **coarse_btables; /* array of Butcher tables for each level */
-  ARKodeButcherTable fine_btable;
-
-  /* Nonlinear solver */
+  /* Nonlinear solver for theta order conditions */
   SUNNonlinearSolver NLS;
-  ARKBraidNlsMem NLS_mem;
+  ARKBraidThetaOrdCondsMem theta_mem;
 
   /* Output time and state */
   realtype tout;
@@ -140,14 +197,9 @@ typedef struct _ARKBraidContent *ARKBraidContent;
 /* Define ARKBraidThetaVecData content */
 struct _ARKBraidThetaVecData
 {
-  /* Store time value at previous C-point */
-  realtype tprior;
-
-  /* Store time-step normalization factor */
-  realtype etascale;
-
-  /* Store order condition rhs */
-  realtype *Phi;
+  realtype  tprior;   /* time value at previous C-point */
+  realtype  etascale; /* time-step normalization factor */
+  realtype *Phi;      /* order condition rhs */
 };
 
 typedef struct _ARKBraidThetaVecData *ARKBraidThetaVecData;
@@ -156,7 +208,6 @@ typedef struct _ARKBraidThetaVecData *ARKBraidThetaVecData;
 /* ---------------------
  * AKBraidTheta
  * --------------------- */
-
 
 booleantype _ARKBraid_IsCPoint(int tindex, int cfactor);
 
@@ -172,7 +223,7 @@ int ARKBraidTheta_BufPack(braid_App app, void* buffer, void* vdata_ptr);
 
 int ARKBraidTheta_BufUnpack(braid_App app, void* buffer, void** vdata_ptr);
 
-int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus);
+int ARKBraidTheta_InitHierarchy(braid_App app, braid_SyncStatus sstatus);
 
 int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
                                   braid_StepStatus status, braid_Vector u);
@@ -183,10 +234,7 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
 int _ARKBraidTheta_GetBTable(ARKBraidContent content, braid_StepStatus status,
                              braid_Int level, braid_Int ti, ARKodeButcherTable* B);
 
-int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content,
-                                         braid_SyncStatus sstatus);
-
-int _ARKBraidTheta_FreeCGBtables(ARKBraidContent content);
+int _ARKBraidTheta_AllocCGBtables(ARKBraidContent content);
 
 int ARKBraidTheta_NlsResidual(N_Vector thcor, N_Vector r, void* mem);
 
@@ -197,15 +245,15 @@ int ARKBraidTheta_NlsLSolve(N_Vector b, void* mem);
 int ARKBraidTheta_NlsConvTest(SUNNonlinearSolver NLS, N_Vector y, N_Vector del,
                               realtype tol, N_Vector ewt, void* mem);
 
-int ARKBraidTheta_NlsSetup(ARKodeMem ark_mem, ARKBraidNlsMem nls_mem,
+int ARKBraidTheta_NlsSetup(ARKodeMem ark_mem, ARKBraidThetaOrdCondsMem nls_mem,
                            SUNNonlinearSolver* NLS_ptr);
 
-int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidNlsMem nls_mem,
+int ARKBraidTheta_NlsSolve(SUNNonlinearSolver NLS, ARKBraidThetaOrdCondsMem nls_mem,
                            realtype* rhs);
 
-int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidNlsMem* nlsmem);
+int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidThetaOrdCondsMem* nlsmem);
 
-int ARKBraidTheta_NlsMem_Free(ARKBraidNlsMem nlsmem);
+int ARKBraidTheta_NlsMem_Free(ARKBraidThetaOrdCondsMem nlsmem);
 
 #ifdef __cplusplus
 }

@@ -1331,6 +1331,51 @@ int ARKStepSetPredictorMethod(void *arkode_mem, int pred_method)
   return(ARK_SUCCESS);
 }
 
+/*---------------------------------------------------------------
+  ARKStepSetStepGuess:
+
+  Sets an initial guess for the solution y(t + h) of the current
+  time step. For use with predictor method 6 (ystopInterp)
+  and with the ARK_ONE_STEP option only.
+  ---------------------------------------------------------------*/
+int ARKStepSetStepGuess(void *arkode_mem, realtype tstop, N_Vector ystop)
+{
+  ARKodeMem ark_mem;
+  ARKodeARKStepMem step_mem;
+  int retval;
+  int pred_method;
+
+  /* access ARKodeARKStepMem structure */
+  retval = arkStep_AccessStepMem(arkode_mem, "ARKStepSetStepGuess",
+                                 &ark_mem, &step_mem);
+  if (retval != ARK_SUCCESS)  return(retval);
+
+  /* Check that the correct predictor is set */
+  pred_method = step_mem->predictor;
+
+  if ((pred_method != 6) && (pred_method != 7)) {
+    // arkProcessError(ark_mem, ARK_ILL_INPUT, "ARKODE::ARKStep", "ARKStepSetStepGuess",
+                    // "This feature is only compatible with stage prediction options 6/7");
+    return (ARK_ILL_INPUT);
+  }
+
+  /* Set reference to ystop in ark_mem */
+  ark_mem->ystop = ystop;
+
+  /* Compute fstop */
+  if (pred_method == 7)
+  {
+    /* Allocate fstop, if needed */
+    retval = arkAllocVec(ark_mem, ystop, &ark_mem->fstop);
+    if (retval != SUNTRUE)  return(ARK_MEM_FAIL);
+
+    retval = ark_mem->step_fullrhs(arkode_mem, tstop, ystop, ark_mem->fstop, ARK_FULLRHS_OTHER);
+    if (retval != 0) return(ARK_RHSFUNC_FAIL);
+  }
+
+  return(ARK_SUCCESS);
+}
+
 
 /*---------------------------------------------------------------
   ARKStepSetMaxNonlinIters:

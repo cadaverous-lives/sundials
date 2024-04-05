@@ -74,9 +74,25 @@ SUNDIALS_EXPORT int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1,
                                                      FILE *outfile);
 
 /* utility functions for computing elementary weights */
-int _phi_order2(realtype *b, realtype *c, int s, realtype *out);
-int _phi_order3a(realtype *b, realtype *c1, realtype *c2, int s, realtype *out);
-int _phi_order3b(realtype *b, realtype **A, realtype *c, int s, realtype *out);
+int _phi_order2(realtype *b, realtype *c, int s, realtype *bc);
+
+int _phi_order3a(realtype *b, realtype *c1, realtype *c2, int s, realtype *bcc);
+int _phi_order3b(realtype *b, realtype **A, realtype *c, int s, realtype *bAc);
+
+int _phi_order4a(realtype *b, realtype *c1, realtype *c2, realtype *c3, int s, realtype *bccc);
+int _phi_order4b(realtype *b, realtype *c1, realtype **A, realtype *c2, int s, realtype *bcAc);
+int _phi_order4c(realtype *b, realtype **A, realtype *c1, realtype *c2, int s, realtype *bAcc);
+int _phi_order4d(realtype *b, realtype **A1, realtype **A2, realtype *c, int s, realtype*bAAc);
+
+int _phi_order5a(realtype *b, realtype *c1, realtype *c2, realtype *c3, realtype *c4, int s, realtype *bcccc);
+int _phi_order5b(realtype *b, realtype *c1, realtype *c2, realtype **A, realtype *c3, int s, realtype *bccAc);
+int _phi_order5c(realtype *b, realtype **A1, realtype *c1, realtype **A2, realtype *c2, int s, realtype *bAcAc);
+int _phi_order5d(realtype *b, realtype *c1, realtype **A, realtype *c2, realtype *c3, int s, realtype *bcAcc);
+int _phi_order5e(realtype *b, realtype **A, realtype *c1, realtype *c2, realtype *c3, int s, realtype *bAccc);
+int _phi_order5f(realtype *b, realtype *c1, realtype **A1, realtype **A2, realtype *c2, int s, realtype *bcAAc);
+int _phi_order5g(realtype *b, realtype **A1, realtype *c1, realtype **A2, realtype *c2, int s, realtype *bAcAc);
+int _phi_order5h(realtype *b, realtype **A1, realtype **A2, realtype *c1, realtype *c2, int s, realtype *bAAcc);
+int _phi_order5i(realtype *b, realtype **A1, realtype **A2, realtype **A3, realtype *c, int s, realtype *bAAAc);
 
 #ifdef __cplusplus
 }

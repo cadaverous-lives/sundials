@@ -156,6 +156,12 @@ ARKodeMem arkCreate(SUNContext sunctx)
     return(NULL);
   }
 
+  /* XBraid interface variables */
+  ark_mem->force_pass   = SUNFALSE;
+  ark_mem->full_storage = SUNFALSE;
+  ark_mem->stage_z      = NULL;
+  ark_mem->nstages_stored = 0;
+
   /* Return pointer to ARKODE memory block */
   return(ark_mem);
 }
@@ -991,6 +997,7 @@ int arkEvolve(ARKodeMem ark_mem, realtype tout, N_Vector yout,
 }
 
 
+
 /*---------------------------------------------------------------
   arkGetDky:
 
@@ -1775,8 +1782,24 @@ void arkFreeVectors(ARKodeMem ark_mem)
   arkFreeVec(ark_mem, &ark_mem->tempv4);
   arkFreeVec(ark_mem, &ark_mem->yn);
   arkFreeVec(ark_mem, &ark_mem->fn);
+  arkFreeVec(ark_mem, &ark_mem->fstop);
   arkFreeVec(ark_mem, &ark_mem->Vabstol);
   arkFreeVec(ark_mem, &ark_mem->constraints);
+
+  /* XBraid interface: these should have been freed by ARKBraid */
+  if (ark_mem->stage_z != NULL)
+  {
+    for (int is = 0; is < ark_mem->nstages_stored; is++)
+    {
+      N_VDestroy(ark_mem->stage_z[is]);
+      ark_mem->stage_z[is] = NULL;
+    }
+    free(ark_mem->stage_z);
+    ark_mem->stage_z        = NULL;
+    ark_mem->nstages_stored = 0;
+    arkProcessError(ark_mem, ARK_MEM_FAIL, "ARKODE", "arkFreeVectors",
+                    "stage_z was not freed!");
+  }
 }
 
 
@@ -2396,6 +2419,9 @@ int arkCompleteStep(ARKodeMem ark_mem, realtype dsm)
   /* update yn to current solution */
   N_VScale(ONE, ark_mem->ycur, ark_mem->yn);
 
+  /* Reset step initial guess */
+  ark_mem->ystop = NULL;
+
   /* Update step size and error history arrays */
   ark_mem->hadapt_mem->ehist[1] = ark_mem->hadapt_mem->ehist[0];
   ark_mem->hadapt_mem->ehist[0] = dsm*ark_mem->hadapt_mem->bias;
@@ -2822,6 +2848,89 @@ int arkPredict_Bootstrap(ARKodeMem ark_mem, realtype hj,
   retval = N_VLinearCombination(nvec+2, cvals, Xvecs, yguess);
   if (retval != 0)  return(ARK_VECTOROP_ERR);
   return(ARK_SUCCESS);
+}
+
+/*---------------------------------------------------------------
+  arkPredict_ystopInterp
+
+  This routine predicts the nonlinear implicit stage solution
+  using either a cubic Hermite spline, based on the data 
+  {y_n, f(t_n,y_n), y_n+1, f(t_n+1,y_n+1)}, or linear interpo-
+  lation based on {y_n, y_n+1}.
+
+  Note: we assume that ftemp = f(t_n+hj,z_j) can be computed via
+     N_VLinearCombination(nvec, cvals, Xvecs, ftemp),
+  i.e. the inputs cvals[0:nvec-1] and Xvecs[0:nvec-1] may be
+  combined to form f(t_n+hj,z_j).
+  ---------------------------------------------------------------*/
+int arkPredict_ystopInterp(ARKodeMem ark_mem, realtype tau, 
+                                int nvecs, realtype *cvals, 
+                                N_Vector *Xvecs, N_Vector yguess)
+{
+  int retval;
+  realtype tau_sqr, tau_cub;
+  tau_sqr = tau*tau;
+  tau_cub = tau_sqr*tau;
+
+  /* verify that ark_mem is provided */
+  if (ark_mem == NULL) {
+    arkProcessError(NULL, ARK_MEM_NULL, "ARKODE",
+                    "arkPredict_ystopInterp",
+                    "ARKodeMem structure is NULL");
+    return(ARK_MEM_NULL);
+  }
+
+  /* verify ystop is set */
+  if (ark_mem->ystop == NULL)
+  {
+    arkProcessError(ark_mem, ARK_ILL_INPUT, "ARKODE",
+                    "arkPredict_ystopInterp",
+                    "ark_mem->ystop is NULL");
+    return(ARK_ILL_INPUT);
+  }
+
+  if (nvecs >= 4)
+  {
+    /* verify fstop is set */
+    if (ark_mem->fstop == NULL)
+    {
+      arkProcessError(ark_mem, ARK_ILL_INPUT, "ARKODE",
+                      "arkPredict_ystopInterp",
+                      "ark_mem->fstop is NULL");
+      return(ARK_ILL_INPUT);
+    }
+
+    /* set arrays for fused vector operation */
+    cvals[0] = TWO*tau_cub - THREE*tau_sqr + 1;
+    Xvecs[0] = ark_mem->yn;
+    cvals[1] = tau_cub - TWO*tau_sqr + tau;
+    Xvecs[1] = ark_mem->fn;
+    cvals[2] = -TWO*tau_cub + THREE*tau_sqr;
+    Xvecs[2] = ark_mem->ystop;
+    cvals[3] = tau_cub - tau_sqr;
+    Xvecs[3] = ark_mem->fstop;
+
+    /* call fused vector operation to compute prediction */
+    retval = N_VLinearCombination(4, cvals, Xvecs, yguess);
+    if (retval != 0)  return(ARK_VECTOROP_ERR);
+    return(ARK_SUCCESS);
+  }
+  else if (nvecs >= 2)
+  {
+    cvals[0] = ONE - tau;
+    Xvecs[0] = ark_mem->yn;
+    cvals[1] = tau;
+    Xvecs[1] = ark_mem->ystop;
+
+    /* call fused vector operation to compute prediction */
+    retval = N_VLinearCombination(2, cvals, Xvecs, yguess);
+    if (retval != 0)  return(ARK_VECTOROP_ERR);
+    return(ARK_SUCCESS);
+  }
+  else
+  {
+    return(ARK_ILL_INPUT);
+  }
 }
 
 

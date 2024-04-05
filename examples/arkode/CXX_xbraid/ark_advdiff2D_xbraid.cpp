@@ -132,7 +132,6 @@ struct UserData
 
   // Linear solver and preconditioner settings
   bool     pcg;       // use PCG (true) or banded LU (false)
-  bool     gmres;     // use gmres (true) or banded LU (false)
   bool     prec;      // preconditioner on/off
   bool     lsinfo;    // output residual history
   int      liniters;  // number of linear iterations
@@ -169,7 +168,7 @@ struct UserData
   int      x_tnorm;         // temporal stopping norm
   int      x_cfactor;       // coarsening factor
   int      x_cfactor0;      // coarsening factor on level 0
-  int      x_max_iter;      // max number of interations
+  int      x_max_iter;      // max number of iterations
   int      x_storage;       // Full storage on levels >= storage
   int      x_print_level;   // xbraid output level
   int      x_access_level;  // access level
@@ -182,6 +181,9 @@ struct UserData
   bool     x_reltol;        // use relative tolerance
   bool     x_init_u0;       // initialize solution to initial condition
   bool     x_use_theta;     // use a higher order method on the coarse grid
+  bool     x_use_ustop;     // use improved initial guess to initialize implicit stages
+  bool     x_ustop_cub;     // use cubic hermite spline interpolation between u and ustop
+  bool     x_stage_storage; // store implicit stage solutions as initial guesses for future steps
 };
 
 // -----------------------------------------------------------------------------
@@ -362,7 +364,7 @@ int main(int argc, char* argv[])
       if (check_flag(&flag, "SUNLinSolSetInfoFile_PCG", 1)) return(1);
     }
   }
-  else if (udata->gmres)
+  else
   {
     LS = SUNLinSol_SPGMR(u, prectype, udata->liniters, ctx);
     if (check_flag((void *) LS, "SUNLinSol_SPGMR", 0)) return 1;
@@ -479,6 +481,21 @@ int main(int argc, char* argv[])
     if (check_flag(&flag, "ARKStepSetDiagnostics", 1)) return 1;
   }
 
+  // Set predictor method to option 6 or 7, enabling improved initial guess
+  // TODO: Let ARKBraid do this for me??
+  if (udata->x_use_ustop)
+  {
+    /* Use linear interpolation between ustart and ustop */
+    flag = ARKStepSetPredictorMethod(arkode_mem, 6);
+    if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
+    if (udata->x_ustop_cub)
+    {
+      /* Use cubic hermite spline */
+      flag = ARKStepSetPredictorMethod(arkode_mem, 7);
+      if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
+    }
+  }
+
   // ------------------------
   // Create XBraid interface
   // ------------------------
@@ -487,13 +504,6 @@ int main(int argc, char* argv[])
   flag = ARKBraid_Create(arkode_mem, &app);
   if (check_flag(&flag, "ARKBraid_Create", 1)) return 1;
 
-  // Set the coarse-grid method order
-  if (udata->x_use_theta)
-  {
-    flag = ARKBraid_SetCoarseOrder(app, udata->order + 1);
-    if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
-  }
-  
   // Override the default initialization function
   flag = ARKBraid_SetInitFn(app, MyInit);
   if (check_flag(&flag, "ARKBraid_SetInitFn", 1)) return 1;
@@ -501,6 +511,17 @@ int main(int argc, char* argv[])
   // Override the default access function
   flag = ARKBraid_SetAccessFn(app, MyAccess);
   if (check_flag(&flag, "ARKBraid_SetAccesFn", 1)) return 1;
+
+  // Set the coarse-grid method order
+  if (udata->x_use_theta)
+  {
+    flag = ARKBraid_SetCoarseOrder(app, udata->order + 1);
+    if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
+  }
+
+  // Turn on full storage
+  flag = ARKBraid_SetFullStorage(app, udata->x_storage, udata->x_stage_storage);
+  if (check_flag(&flag, "ARKBraid_SetFullStorage", 1)) return 1;
 
   // Initialize the ARKStep + XBraid interface
   flag = ARKBraid_BraidInit(comm_w, comm_w, ZERO, udata->tf,
@@ -1157,11 +1178,10 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->diagnostics = false;           // output diagnostics
 
   // Linear solver and preconditioner options
-  udata->pcg       = false;      // use PCG (true) or bandedlu (false)
-  udata->gmres     = true;       // use gmres (true) or bandedlu (false)
+  udata->pcg       = false;      // use PCG
   udata->prec      = true;       // enable preconditioning
   udata->lsinfo    = false;      // output residual history
-  udata->liniters  = 200;        // max linear iterations
+  udata->liniters  = 100;        // max linear iterations
   udata->msbp      = 0;          // use default (20 steps)
   udata->epslin    = ZERO;       // use default (0.05)
 
@@ -1185,7 +1205,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   // Xbraid
   udata->x_tol           = 1.0e-4;
   udata->x_nt            = 64;
-  udata->x_skip          = 0;
+  udata->x_skip          = 1;
   udata->x_max_levels    = 16;
   udata->x_min_coarse    = 3;
   udata->x_nrelax        = 1;
@@ -1206,6 +1226,9 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_reltol        = false;
   udata->x_init_u0       = false;
   udata->x_use_theta     = false;
+  udata->x_use_ustop     = false;
+  udata->x_ustop_cub     = false;
+  udata->x_stage_storage = false;
 
   // Return success
   return 0;
@@ -1307,7 +1330,6 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     else if (arg == "--pcg")
     {
       udata->pcg = true;
-      udata->gmres = false;
     }
     else if (arg == "--lsinfo")
     {
@@ -1379,6 +1401,10 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->x_storage = stoi((*argv)[arg_idx++]);
     }
+    else if (arg == "--x_stage_storage")
+    {
+      udata->x_stage_storage = true;
+    }
     else if (arg == "--x_print_level")
     {
       udata->x_print_level = stoi((*argv)[arg_idx++]);
@@ -1422,6 +1448,14 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     else if (arg == "--x_theta")
     {
       udata->x_use_theta = true;
+    }
+    else if (arg == "--x_ustop")
+    {
+      udata->x_use_ustop = true;
+    }
+    else if (arg == "--x_hermite")
+    {
+      udata->x_ustop_cub = true;
     }
     // Output settings
     else if (arg == "--output")
@@ -1556,7 +1590,10 @@ static void InputHelp()
   cout << "  --x_cfactor <fac>       : Coarsening factor" << endl;
   cout << "  --x_cfactor0 <fac>      : Coarsening factor on level 0" << endl;
   cout << "  --x_max_iter <max>      : Max number of multigrid iterations" << endl;
-  cout << "  --x_storage <lev>       : Full storage on levels >= <lev>" << endl;
+  cout << "  --x_storage <lev>       : Full storage on levels >= <lev> (use with --x_ustop)" << endl;
+  cout << "  --x_ustop               : Use solution from previous MGRIT iteration for implicit stage prediction" << endl;
+  cout << "  --x_hermite             : Use cubic Hermite spline interpolation between ustart and ustop (default linear interpolation)" << endl;
+  cout << "  --x_stage_storage       : Store implicit stages for use as initial guess on subsequent calls to Step" << endl;
   cout << "  --x_print_level <lev>   : Set print level" << endl;
   cout << "  --x_access_level <lev>  : Set access level" << endl;
   cout << "  --x_rfactor_limit <fac> : Max refinement factor" << endl;

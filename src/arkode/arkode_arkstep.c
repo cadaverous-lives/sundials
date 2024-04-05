@@ -1599,6 +1599,19 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
       if (retval > 0) return(ARK_NLS_SETUP_RECVR);
     }
 
+  /* XBraid interface: allocate stage_z if needed */
+  if (step_mem->implicit && ark_mem->full_storage && 
+     ((!ark_mem->stage_z) || (ark_mem->nstages_stored != step_mem->stages)))
+  {
+    ark_mem->stage_z = (N_Vector*)realloc(ark_mem->stage_z, step_mem->stages*sizeof(N_Vector));
+    if (ark_mem->stage_z == NULL) return(ARK_MEM_FAIL);
+    ark_mem->nstages_stored = step_mem->stages;
+    for (is = 0; is < step_mem->stages; is++)
+    {
+      ark_mem->stage_z[is] = NULL;
+    }
+  }
+
   /* loop over internal stages to the step */
   for (is=0; is<step_mem->stages; is++) {
 
@@ -1731,16 +1744,28 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
     /*    store implicit RHS (value in Fi[is] is from preceding nonlinear iteration) */
     if (step_mem->implicit) {
 
+      /* XBraid interface: store results of nonlinear solve in stage_z */
+      if (ark_mem->full_storage && ark_mem->stage_z)
+      {
+        if (ark_mem->stage_z[is] == NULL)
+        {
+          ark_mem->stage_z[is] = N_VClone(ark_mem->ycur);
+        } 
+        N_VScale(ONE, ark_mem->ycur, ark_mem->stage_z[is]);
+      }
+
       if (!deduce_stage) {
         retval = step_mem->fi(ark_mem->tcur, ark_mem->ycur,
                               step_mem->Fi[is], ark_mem->user_data);
         step_mem->nfi++;
-      } else if (step_mem->mass_type == MASS_FIXED)  {
+      } 
+      else if (step_mem->mass_type == MASS_FIXED)  {
         retval = step_mem->mmult((void *) ark_mem, step_mem->zcor, ark_mem->tempv1);
         if (retval != ARK_SUCCESS)  return (ARK_MASSMULT_FAIL);
         N_VLinearSum(ONE / step_mem->gamma, ark_mem->tempv1,
                      -ONE / step_mem->gamma, step_mem->sdata, step_mem->Fi[is]);
-      } else {
+      } 
+      else {
         N_VLinearSum(ONE / step_mem->gamma, step_mem->zcor,
                      -ONE / step_mem->gamma, step_mem->sdata, step_mem->Fi[is]);
       }
@@ -2187,6 +2212,22 @@ int arkStep_Predict(ARKodeMem ark_mem, int istage, N_Vector yguess)
   realtype* cvals;
   N_Vector* Xvecs;
 
+  /* XBraid interface: if stage_z is set, use those! */
+  if (ark_mem->full_storage)
+  {
+    if (ark_mem->stage_z == NULL) {
+      arkProcessError(ark_mem, ARK_MEM_NULL, "ARKODE::ARKStep",
+                    "arkStep_Predict",
+                    "stage_z is NULL");
+      return(ARK_MEM_NULL);
+    }
+
+    if (ark_mem->stage_z[istage]) {
+      N_VScale(ONE, ark_mem->stage_z[istage], yguess);
+      return(ARK_SUCCESS);
+    }
+  }
+
   /* access ARKodeARKStepMem structure */
   if (ark_mem->step_mem == NULL) {
     arkProcessError(NULL, ARK_MEM_NULL, "ARKODE::ARKStep",
@@ -2208,9 +2249,13 @@ int arkStep_Predict(ARKodeMem ark_mem, int istage, N_Vector yguess)
   Xvecs = step_mem->Xvecs;
 
   /* if the first step, use initial condition as guess */
-  if (ark_mem->initsetup) {
+  if (ark_mem->initsetup && (step_mem->predictor < 6)) {
     N_VScale(ONE, ark_mem->yn, yguess);
     return(ARK_SUCCESS);
+  }
+  else if (step_mem->predictor >= 6)
+  {
+    ark_mem->hold = ark_mem->h;
   }
 
   /* set evaluation time tau as relative shift from previous successful time */
@@ -2312,6 +2357,23 @@ int arkStep_Predict(ARKodeMem ark_mem, int istage, N_Vector yguess)
     retval = N_VLinearCombination(nvec, cvals, Xvecs, yguess);
     if (retval != 0) return(ARK_VECTOROP_ERR);
     return(ARK_SUCCESS);
+    break;
+
+  /* Options 6 and 7 are for use with the XBraid interface */
+  case 6:
+
+    /***** Interpolatory Predictor 6 -- ystop linear interpolation *****/
+    if (ark_mem->ystop == NULL) break;
+    retval = arkPredict_ystopInterp(ark_mem, tau, 2, cvals, Xvecs, yguess);
+    if (retval != ARK_ILL_INPUT)  return(retval);
+    break;
+
+  case 7:
+
+    /***** Interpolatory Predictor 7 -- ystop cubic hermite spline *****/
+    if (ark_mem->ystop == NULL) break;
+    retval = arkPredict_ystopInterp(ark_mem, tau, 4, cvals, Xvecs, yguess);
+    if (retval != ARK_ILL_INPUT)  return(retval);
     break;
 
   }

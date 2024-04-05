@@ -2016,5 +2016,60 @@ int arkGetLastKFlag(void *arkode_mem, int *last_kflag)
 
 
 /*---------------------------------------------------------------
+  arkSetFullStorage:
+
+  tell ARKStep to store the results of all implicit stage solves
+  ---------------------------------------------------------------*/
+int arkSetFullStorage(void *arkode_mem, booleantype full_storage)
+{
+  ARKodeMem ark_mem;
+  if (arkode_mem==NULL) {
+    arkProcessError(NULL, ARK_MEM_NULL, "ARKODE",
+                    "arkSetFullStorage", MSG_ARK_NO_MEM);
+    return(ARK_MEM_NULL);
+  }
+  ark_mem = (ARKodeMem) arkode_mem;
+
+  ark_mem->full_storage = full_storage;
+
+  return(ARK_SUCCESS);
+}
+
+int arkGetStageZs(void *arkode_mem, N_Vector **stage_z, sunindextype *nstages)
+{
+  ARKodeMem ark_mem;
+  if (arkode_mem==NULL) {
+    arkProcessError(NULL, ARK_MEM_NULL, "ARKODE",
+                    "arkGetStageZs", MSG_ARK_NO_MEM);
+    return(ARK_MEM_NULL);
+  }
+  ark_mem = (ARKodeMem) arkode_mem;
+
+  *stage_z = ark_mem->stage_z;
+  *nstages = ark_mem->nstages_stored;
+  ark_mem->stage_z        = NULL;
+  ark_mem->nstages_stored = 0;
+
+  return(ARK_SUCCESS);
+}
+
+int arkSetStageZs(void *arkode_mem, N_Vector *stage_z, sunindextype nstages)
+{
+  ARKodeMem ark_mem;
+  if (arkode_mem==NULL) {
+    arkProcessError(NULL, ARK_MEM_NULL, "ARKODE",
+                    "arkSetStageZs", MSG_ARK_NO_MEM);
+    return(ARK_MEM_NULL);
+  }
+  ark_mem = (ARKodeMem) arkode_mem;
+
+  ark_mem->stage_z        = stage_z;
+  ark_mem->nstages_stored = nstages;
+
+  return(ARK_SUCCESS);
+}
+
+
+/*---------------------------------------------------------------
   EOF
   ---------------------------------------------------------------*/

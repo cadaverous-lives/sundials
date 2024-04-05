@@ -215,6 +215,9 @@ SUNDIALS_EXPORT int ARKStepSetLSetupFrequency(void *arkode_mem,
                                               int msbp);
 SUNDIALS_EXPORT int ARKStepSetPredictorMethod(void *arkode_mem,
                                               int method);
+SUNDIALS_EXPORT int ARKStepSetStepGuess(void *arkode_mem, 
+                                        realtype tstop,
+                                        N_Vector ystop);
 SUNDIALS_EXPORT int ARKStepSetStabilityFn(void *arkode_mem,
                                           ARKExpStabFn EStab,
                                           void *estab_data);

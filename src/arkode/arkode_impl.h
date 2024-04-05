@@ -324,6 +324,9 @@ typedef struct ARKodeMemRec {
                              as evolving solution by the timestepper modules */
   N_Vector yn;            /* solution from the last successful step          */
   N_Vector fn;            /* full IVP right-hand side from last step         */
+  N_Vector ystop;         /* solution guess at the end of current step 
+                             (not allocated here)                            */
+  N_Vector fstop;         /* full IVP right-hand side at tstop (=f(ystop))   */
   N_Vector tempv1;        /* temporary storage vectors (for local use and by */
   N_Vector tempv2;        /* time-stepping modules)                          */
   N_Vector tempv3;
@@ -412,18 +415,27 @@ typedef struct ARKodeMemRec {
   ARKPostProcessFn ProcessStage;
 
   /* XBraid interface variables */
-  booleantype force_pass;  /* when true the step attempt loop will ignore the
-                              return value (kflag) from arkCheckTemporalError
-                              and set kflag = ARK_SUCCESS to force the step
-                              attempt to always pass (if a solver failure did
-                              not occur before the error test). */
-  int         last_kflag;  /* last value of the return flag (kflag) from a call
-                              to arkCheckTemporalError. This is only set when
-                              force_pass is true and is used by the XBraid
-                              interface to determine if a time step passed or
-                              failed the time step error test.  */
-} *ARKodeMem;
+  booleantype force_pass;   /* when true the step attempt loop will ignore the
+                               return value (kflag) from arkCheckTemporalError
+                               and set kflag = ARK_SUCCESS to force the step
+                               attempt to always pass (if a solver failure did
+                               not occur before the error test). */
+  int         last_kflag;   /* last value of the return flag (kflag) from a call
+                               to arkCheckTemporalError. This is only set when
+                               force_pass is true and is used by the XBraid
+                               interface to determine if a time step passed or
+                               failed the time step error test.  */
+  booleantype full_storage; /* when true, the intermediate stage z-values will
+                               be stored in stage_z. If stage_z is NULL at the
+                               beginning of a step, it will be allocated and
+                               the implicit stage values will be stored. If 
+                               stage_z is not NULL at the beginning of a step, 
+                               the stored values will be used as initial guesses 
+                               instead of the built-in predictor. */
+  N_Vector   *stage_z;       
+  int         nstages_stored; /* number of stage vectors allocated in stage_z */
 
+} *ARKodeMem;
 
 
 /*===============================================================
@@ -952,6 +964,9 @@ int arkPredict_CutoffOrder(ARKodeMem ark_mem, realtype tau,
 int arkPredict_Bootstrap(ARKodeMem ark_mem, realtype hj,
                          realtype tau, int nvec, realtype *cvals,
                          N_Vector *Xvecs, N_Vector yguess);
+int arkPredict_ystopInterp(ARKodeMem ark_mem, realtype tau, 
+                                int nvecs, realtype *cvals, 
+                                N_Vector *Xvecs, N_Vector yguess);
 int arkCheckConvergence(ARKodeMem ark_mem, int *nflagPtr, int *ncfPtr);
 int arkCheckConstraints(ARKodeMem ark_mem, int *nflag, int *constrfails);
 int arkCheckTemporalError(ARKodeMem ark_mem, int *nflagPtr, int *nefPtr,
@@ -1033,6 +1048,9 @@ ARKODE_ERKTableID arkButcherTableERKNameToID(const char *emethod);
 /* XBraid interface functions */
 int arkSetForcePass(void *arkode_mem, booleantype force_pass);
 int arkGetLastKFlag(void *arkode_mem, int *last_kflag);
+int arkSetFullStorage(void *arkode_mem, booleantype full_storage);
+int arkGetStageZs(void *arkode_mem, N_Vector **stage_z, sunindextype *nstages);
+int arkSetStageZs(void *arkode_mem, N_Vector *stage_z, sunindextype nstages);
 
 
 /*===============================================================

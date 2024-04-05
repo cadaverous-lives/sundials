@@ -47,6 +47,8 @@ SUNDIALS_EXPORT int ARKBraid_Free(braid_App *app);
 
 SUNDIALS_EXPORT int ARKBraid_SetCoarseOrder(braid_App app, int order);
 
+SUNDIALS_EXPORT int ARKBraid_SetFullStorage(braid_App app, braid_Int storage, braid_Int stage_storage);
+
 SUNDIALS_EXPORT int ARKBraid_SetStepFn(braid_App app, braid_PtFcnStep step);
 
 SUNDIALS_EXPORT int ARKBraid_SetInitFn(braid_App app, braid_PtFcnInit init);
@@ -92,9 +94,8 @@ SUNDIALS_EXPORT int ARKBraid_Init(braid_App app, realtype t,
 SUNDIALS_EXPORT int ARKBraid_Access(braid_App app, braid_Vector u,
                                     braid_AccessStatus astatus);
 
-SUNDIALS_EXPORT int ARKBraidTheta_Sync(braid_App app, braid_SyncStatus sstatus);
+SUNDIALS_EXPORT int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus);
 
-// 2. Add ARKODE implementations of these functions (declare in include/arkode/arkode_xbraid.h and define in src/arkode/arkode_xbraid.c):
 /* return the buffer space needed, this will get added to the buffer space needed for the vector data in SUNBraidVector_BufSize */
 SUNDIALS_EXPORT int ARKBraidTheta_GetBufSize(braid_App app, braid_Int *size_ptr);
  
@@ -114,10 +115,8 @@ SUNDIALS_EXPORT int ARKBraidTheta_FreeVecData(braid_App app, void *vdata_ptr);
  * ----------------- */
 
 
-SUNDIALS_EXPORT int ARKBraid_TakeStep(void *arkode_mem, realtype tstart,
-                                      realtype tstop, N_Vector y,
-                                      int *ark_flag);
-
+SUNDIALS_EXPORT int ARKBraid_TakeStep(void *arkode_mem, realtype tstart, realtype tstop, 
+                                      N_Vector y, N_Vector ystop, int *ark_flag);
 
 #ifdef __cplusplus
 }

@@ -34,8 +34,8 @@ extern "C" {
 
 struct _braid_Vector_struct
 {
-  N_Vector  y; /* the solution vector */
-  void *vdata; /* auxilliary time-dependent data, handled by SUNBraidOps */
+  N_Vector  y;  /* the solution vector */
+  void *vdata;  /* auxilliary time-dependent data, handled by SUNBraidOps */
 };
 
 /* Pointer to vector wrapper (same as braid_Vector) */
