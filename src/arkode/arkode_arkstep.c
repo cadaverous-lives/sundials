@@ -1603,16 +1603,22 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
   if (step_mem->implicit && ark_mem->full_storage && 
      ((!ark_mem->stage_z) || (ark_mem->nstages_stored != step_mem->stages)))
   {
+    /* Free any old stages as they won't be good any more */
+    if (ark_mem->stage_z)
+    {
+      for (is = 0; is < ark_mem->nstages_stored; is++)
+      {
+        if (ark_mem->stage_z[is] != NULL)
+          N_VDestroy(ark_mem->stage_z[is]);
+      }
+    }
+
     ark_mem->stage_z = (N_Vector*)realloc(ark_mem->stage_z, step_mem->stages*sizeof(N_Vector));
     if (ark_mem->stage_z == NULL) return(ARK_MEM_FAIL);
     ark_mem->nstages_stored = step_mem->stages;
 
-    /* Free any old stages as they won't be good any more */
     for (is = 0; is < step_mem->stages; is++)
     {
-      if (ark_mem->stage_z[is] != NULL)
-        N_VDestroy(ark_mem->stage_z[is]);
-
       ark_mem->stage_z[is] = NULL;
     }
   }
