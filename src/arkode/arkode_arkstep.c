@@ -1606,8 +1606,13 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
     ark_mem->stage_z = (N_Vector*)realloc(ark_mem->stage_z, step_mem->stages*sizeof(N_Vector));
     if (ark_mem->stage_z == NULL) return(ARK_MEM_FAIL);
     ark_mem->nstages_stored = step_mem->stages;
+
+    /* Free any old stages as they won't be good any more */
     for (is = 0; is < step_mem->stages; is++)
     {
+      if (ark_mem->stage_z[is] != NULL)
+        N_VDestroy(ark_mem->stage_z[is]);
+
       ark_mem->stage_z[is] = NULL;
     }
   }
@@ -1747,6 +1752,13 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
       /* XBraid interface: store results of nonlinear solve in stage_z */
       if (ark_mem->full_storage && ark_mem->stage_z)
       {
+        // if (ark_mem->stage_z[is])
+        // {
+        //   N_VLinearSum(1, ark_mem->ycur, -1, step_mem->zpred, step_mem->zpred);
+        //   printf("guess_qual=%e\n", SUNRsqrt(N_VDotProd(step_mem->zpred, step_mem->zpred)));
+        //   // printf("guess_qual=%e\n", N_VWrmsNorm(step_mem->zpred, ark_mem->ewt));
+        // }
+
         if (ark_mem->stage_z[is] == NULL)
         {
           ark_mem->stage_z[is] = N_VClone(ark_mem->ycur);

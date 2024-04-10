@@ -69,6 +69,14 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
   content->snorm  = SUNBraidVector_SpatialNorm;
   content->access = ARKBraid_Access;
 
+  /* Options */
+  content->storage         = -1;
+  content->loose_tol_fac   =  1.;   /* default is same tolerance on every level */
+  content->loose_fine_rtol =  1e-3; /* for the coarse grid correction to have at least three    */
+  content->tight_fine_rtol =  1e-3; /* digits of accuracy, the tau correction and the coarse    */
+  content->coarse_rtol     =  1e-3; /* grid equation both need to gain three digits of accuracy */
+                                    /* relative to the previous iteration */
+
   /* Saved return flags */
   content->last_flag_braid  = SUNBRAID_SUCCESS;
   content->last_flag_arkode = SUNBRAID_SUCCESS;
@@ -91,8 +99,7 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
   step_mem = (ARKodeARKStepMem)content->ark_mem->step_mem;
 
   content->order_fine = step_mem->q;
-  // TODO: should this default to q + 1?
-  content->order_coarse = step_mem->q;
+  content->order_coarse = step_mem->q; // TODO: should this default to q + 1?
 
   content->num_order_conditions =
     _ARKBraidTheta_GetNumOrderConditions(content->order_fine,
@@ -101,8 +108,6 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
   content->num_levels_alloc = 0;
   content->grids          = NULL;
   content->ark_mem_coarse = NULL;
-  content->num_tables     = NULL;
-  content->coarse_btables = NULL;
   content->fine_btable    = NULL;
 
   /* Attach content */
@@ -234,6 +239,46 @@ int ARKBraid_SetFullStorage(braid_App app, braid_Int storage, braid_Int stage_st
   content = (ARKBraidContent)app->content;
   content->storage       = storage;
   content->stage_storage = stage_storage;
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_SetLooseTolFactor(braid_App app, braid_Real loose_tol_fac)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent)app->content;
+  content->loose_tol_fac = loose_tol_fac;
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_SetFineRTol(braid_App app, braid_Real tight_rtol, braid_Real loose_rtol)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent)app->content;
+  content->tight_fine_rtol = tight_rtol;
+  content->loose_fine_rtol = loose_rtol;
+
+  return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_SetCoarseRTol(braid_App app, braid_Real rtol)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent)app->content;
+  content->coarse_rtol = rtol;
 
   return SUNBRAID_SUCCESS;
 }
@@ -431,21 +476,39 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   ARKBraidTheta_StepElemWeights(content, status, u);
 
   // TODO: set solver tolerance based on MGRIT residual/level
+  braid_Real step_atol, step_rtol; /* abs and rel solver tolerances for this step   */
+  sunrealtype atol, rtol;          /* tolerances set by user in ARKStepSStolerances */
+  atol = content->ark_mem->Sabstol;
+  rtol = content->ark_mem->reltol;
+  step_rtol = rtol;
+
+  /* Adjust tolerances */
+  // braid_GetSpatialAccuracy(status, content->loose_tol_fac * atol, atol, &step_atol);
+  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac * atol, atol, &step_atol);
+  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac * rtol, rtol, &step_rtol);
+  // if (ti == 0)
+  // {
+  //   printf("atol: %f, rtol: %f\n", step_atol, step_rtol);
+  // }
 
   /* Get stored stage initial guess if available */
   if (grid->stage_zs)
   {
     /* This allows using stored intermediate stage values 
     from previous calls to step at this time index */
-    /* ARKODE will allocate this even if it is NULL */
-    flag = arkSetStageZs((void*)content->ark_mem, grid->stage_zs[tir], grid->num_stages[tir]);
-    if (flag != ARK_SUCCESS) return flag;
-
+    /* ARKODE will allocate this if it is NULL */
     flag = arkSetFullStorage((void*)content->ark_mem, SUNTRUE);
-    if (flag != ARK_SUCCESS) return flag;
+    CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
+    flag = arkSetStageZs((void*)content->ark_mem, grid->stage_zs[tir], grid->num_stages[tir]);
+    CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
   }
   gotzs    = (grid->num_stages != NULL && grid->num_stages[tir] > 0);
   gotustop = (u != ustop);
+
+  /* Set step tolerances */
+  flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Turn off error estimation on coarse grids */
   if (!fixedstep && level > 0)
@@ -458,27 +521,27 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   liters_start = lsmem->nli;
 
-  /* Finally propagate the solution */
-  // if (level == 0)
   flag = ARKBraid_TakeStep((void*)(content->ark_mem), tstart, tstop, u->y, ustop->y, &ark_flag);
-  // else
-  //   flag = ARKBraid_TakeStep((void*)(content->ark_mem_coarse), tstart, tstop,
-  //                            u->y, &ark_flag);
 
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   liters_stop = lsmem->nli;
-  // printf("Level: %d, ti: %d, ustop: %d, z: %d, liters: %d\n", level, ti, gotustop, gotzs, liters_stop-liters_start);
+  // printf("Level: %d, ti: %d, rtol=%e, atol=%e, z: %d, liters: %d\n", level, ti, step_rtol, step_atol, gotzs, liters_stop-liters_start);
 
   /* Restore fixedstep value */
   if (!fixedstep && level > 0)
     /* Setting zero here turns adaptivity back on */
     arkSetFixedStep(content->ark_mem, ZERO);
 
+  /* Restore step tolerances */
+  flag = ARKStepSStolerances(content->ark_mem, rtol, atol);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+
   /* Retrieve updated intermediate stages */
   if (grid->stage_zs)
   {
     arkGetStageZs(content->ark_mem, &grid->stage_zs[tir], &grid->num_stages[tir]);
+    CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
   }
 
   /* Refine grid (XBraid will ignore if refinement is disabled) */
@@ -848,4 +911,87 @@ int ARKBraidGridData_Free(ARKBraidGridData *grid_ptr)
   *grid_ptr = NULL;
 
   return SUNBRAID_SUCCESS;
+}
+
+int ARKBraid_GetSpatialAccuracy(braid_StepStatus  status, braid_Real loose_tol,
+                             braid_Real tight_tol, braid_Real *tol_ptr)
+{
+   braid_Int nrequest   = 2;
+   braid_Real stol, tol, rnorm, rnorm0, old_fine_tolx;
+   braid_Int level;
+   braid_Real l_rnorm, l_ltol, l_ttol, l_tol;
+   braid_Real *rnorms = (braid_Real *) malloc( 2*sizeof(braid_Real) );
+
+   braid_StepStatusGetTol(status, &tol);
+   braid_StepStatusGetLevel(status, &level);
+   braid_StepStatusGetOldFineTolx(status, &old_fine_tolx);
+
+   /* Get the first and then the current residual norms */
+   rnorms[0] = -1.0; rnorms[1] = -1.0;
+   braid_StepStatusGetRNorms(status, &nrequest, rnorms);
+   if((rnorms[0] == -1.0) && (rnorms[1] != -1.0)){
+      rnorm0 = rnorms[1];
+   }
+   else{
+      rnorm0 = rnorms[0];
+   }
+   nrequest = -2;
+   braid_StepStatusGetRNorms(status, &nrequest, rnorms);
+   if((rnorms[1] == -1.0) && (rnorms[0] != -1.0)){
+      rnorm = rnorms[0];
+   }
+   else{
+      rnorm = rnorms[1];
+   }
+
+
+   if (level == 0)
+   {
+      /* Always return tight tolerance here to ensure refinement is done correctly */
+      *tol_ptr = tight_tol;
+
+      free(rnorms);
+      return SUNBRAID_SUCCESS;
+   }
+   else if ( (nrequest == 0) || (rnorm0 == -1.0) )
+   {
+      /* Always return the loose tolerance, if there is no residual history yet 
+       * (this is the first Braid iteration with skip turned on) */
+      *tol_ptr = loose_tol;
+   }
+   else
+   {
+      /* Else, do a variable tolerance for the fine grid */
+      // l_rnorm = -log10(rnorm / rnorm0);
+      // l_tol   = -log10(tol / rnorm0);
+      l_rnorm = -log10(rnorm);
+      l_tol   = -log10(tol);
+      l_ltol  = -log10(loose_tol);
+      l_ttol  = -log10(tight_tol);
+
+      if ( l_rnorm >= (7.0/8.0)*l_tol )
+      {
+         /* Close to convergence, return tight_tol */
+         *tol_ptr = tight_tol;
+      }
+      else
+      {
+         /* Do linear interpolation between loose_tol and tight_tol (but with respect to log10) */
+         stol = (l_rnorm / l_tol) * (l_ttol - l_ltol) + l_ltol;
+         *tol_ptr = pow(10, -stol);
+
+         /* The fine grid tolerance MUST never decrease */
+         if ( ((*tol_ptr) > old_fine_tolx) && (old_fine_tolx > 0) )
+         {
+            *tol_ptr = old_fine_tolx;
+         }
+      }
+   }
+
+   /* Store this tolerance */
+   braid_StepStatusSetOldFineTolx(status, (*tol_ptr));
+
+   free(rnorms);
+   /* printf( "lev: %d, accuracy: %1.2e, nreq: %d, rnorm: %1.2e, rnorm0: %1.2e, loose: %1.2e, tight: %1.2e, old: %1.2e, braid_tol: %1.2e \n", level, *tol_ptr, nrequest, rnorm, rnorm0, loose_tol, tight_tol, old_fine_tolx, tol); */
+   return SUNBRAID_SUCCESS;
 }

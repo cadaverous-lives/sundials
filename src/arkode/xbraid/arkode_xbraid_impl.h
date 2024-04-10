@@ -131,11 +131,16 @@ struct _ARKBraidContent
   /* Options */
   int rfac_limit;  /* refinement factor limit           */
   int rfac_fail;   /* refinement factor for failed step */
-  int storage;               /* storage level: 
-                               (enables improved initial guess for implicit stages)
-                               -1: minimum storage, only C-points 
-                                0: full storage on all levels
-                           x >= 1: full storage on all levels >= 1 */
+  sunrealtype tight_fine_rtol;    /* step tolerance used on fine-grid at convergence */
+  sunrealtype loose_fine_rtol;    /* step tolerance used on fine-grid prior to convergence */
+  sunrealtype coarse_rtol;        /* step tolerance used on coarse-grids */
+  sunrealtype loose_tol_fac;      /* factor used to scale up the solver tolerance on coarse
+                                     levels and early MGRIT iterations. */
+  int storage;     /* storage level: 
+                     (enables improved initial guess for implicit stages)
+                     -1: minimum storage, only C-points 
+                      0: full storage on all levels
+                 x >= 1: full storage on all levels >= 1 */
   booleantype stage_storage; /* if true, stage values will also be stored for all steps 
                                 on all levels where full storage is set */
 
@@ -153,16 +158,10 @@ struct _ARKBraidContent
   int  num_levels_alloc;
   int *num_steps_stored; /* number of steps per level which are stored */
 
-  /* Grid data storage */
+  /* Grid data storage for stage values and Butcher tables */
   ARKBraidGridData *grids;
 
-  /* Storage for implicit stage values on each level */
-  int       **num_stages;       /* number of stages stored per step on each level */
-  N_Vector ***stage_zs;         /* storage for stage values */
-
-  /* Butcher tables */
-  int *num_tables;  /* number of Butcher tables for each level */
-  ARKodeButcherTable **coarse_btables; /* array of Butcher tables for each level */
+  /* Fine grid Butcher table */
   ARKodeButcherTable fine_btable;
 
   /* Flags for theta method */

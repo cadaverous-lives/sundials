@@ -2018,7 +2018,7 @@ int arkGetLastKFlag(void *arkode_mem, int *last_kflag)
 /*---------------------------------------------------------------
   arkSetFullStorage:
 
-  tell ARKStep to store the results of all implicit stage solves
+  Tell ARKStep to store the results of all implicit stage solves
   ---------------------------------------------------------------*/
 int arkSetFullStorage(void *arkode_mem, booleantype full_storage)
 {
@@ -2035,6 +2035,11 @@ int arkSetFullStorage(void *arkode_mem, booleantype full_storage)
   return(ARK_SUCCESS);
 }
 
+/*---------------------------------------------------------------
+  arkGetStageZs:
+
+  Get the stored implicit stage solutions
+  ---------------------------------------------------------------*/
 int arkGetStageZs(void *arkode_mem, N_Vector **stage_z, sunindextype *nstages)
 {
   ARKodeMem ark_mem;
@@ -2053,6 +2058,11 @@ int arkGetStageZs(void *arkode_mem, N_Vector **stage_z, sunindextype *nstages)
   return(ARK_SUCCESS);
 }
 
+/*---------------------------------------------------------------
+  arkGetStageZs:
+
+  Set initial guesses for the stage vectors
+  ---------------------------------------------------------------*/
 int arkSetStageZs(void *arkode_mem, N_Vector *stage_z, sunindextype nstages)
 {
   ARKodeMem ark_mem;

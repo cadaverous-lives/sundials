@@ -159,10 +159,11 @@ struct UserData
 
   // XBraid settings
   realtype x_tol;           // Xbraid stopping tolerance
+  realtype x_loose_tol;     // spatial solver tolerance on coarse grids
   int      x_nt;            // number of fine grid time points
   int      x_skip;          // skip all work on first down cycle
   int      x_max_levels;    // max number of levels
-  int      x_min_coarse;    // min possible coarse gird size
+  int      x_min_coarse;    // min possible coarse grid size
   int      x_nrelax;        // number of CF relaxation sweeps on all levels
   int      x_nrelax0;       // number of CF relaxation sweeps on level 0
   int      x_tnorm;         // temporal stopping norm
@@ -199,6 +200,9 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus);
 
 // ODE right hand side function
 static int f(realtype t, N_Vector u, N_Vector f, void *user_data);
+
+// function to store maximum error across entire simulation
+static int recMaxError(realtype t, N_Vector y, void *user_data);
 
 // Preconditioner setup and solve functions
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
@@ -461,9 +465,18 @@ int main(int argc, char* argv[])
   // Set adaptive stepping (XBraid with temporal refinement) options
   if (udata->x_refine)
   {
-    // Use I controller
-    flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 0, NULL);
-    if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    if (udata->x_max_levels > 1)
+    {
+      // Use I controller
+      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 0, NULL);
+      if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    }
+    else
+    {
+      // Use PID controller
+      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_PID, 1, 0, NULL);
+      if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    }
 
     // Set the step size reduction factor limit (1 / refinement factor limit)
     flag = ARKStepSetMinReduction(arkode_mem, ONE / udata->x_rfactor_limit);
@@ -490,11 +503,19 @@ int main(int argc, char* argv[])
     if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
     if (udata->x_ustop_cub)
     {
-      /* Use cubic hermite spline */
+      /* Use cubic Hermite spline */
       flag = ARKStepSetPredictorMethod(arkode_mem, 7);
       if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
     }
   }
+
+  // Set function to record max error, in case sequential time stepping is used
+  if (udata->x_max_levels <= 1)
+  {
+    flag = ARKStepSetPostprocessStepFn(arkode_mem, recMaxError);
+    if (check_flag(&flag, "ARKStepSetPostprocessStepFn", 1)) return 1;
+  }
+
 
   // ------------------------
   // Create XBraid interface
@@ -522,6 +543,13 @@ int main(int argc, char* argv[])
   // Turn on full storage
   flag = ARKBraid_SetFullStorage(app, udata->x_storage, udata->x_stage_storage);
   if (check_flag(&flag, "ARKBraid_SetFullStorage", 1)) return 1;
+
+  // Set loose tolerance
+  if (udata->x_loose_tol > 0)
+  {
+    flag = ARKBraid_SetLooseTolFactor(app, udata->x_loose_tol/udata->x_tol);
+    if (check_flag(&flag, "ARKBraid_SetLooseTolFactor", 1)) return 1;
+  }
 
   // Initialize the ARKStep + XBraid interface
   flag = ARKBraid_BraidInit(comm_w, comm_w, ZERO, udata->tf,
@@ -603,7 +631,7 @@ int main(int argc, char* argv[])
   if (check_flag(&flag, "braid_SetAccessLevel", 1)) return 1;
 
   if (udata->x_initseq) {
-    flag =  braid_SetSeqSoln(core, 1);
+    flag = braid_SetSeqSoln(core, 1);
     if (check_flag(&flag, "braid_SetSeqSoln", 1)) return 1;
   }
 
@@ -876,14 +904,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
     }
 
     // Compute the max error
-    flag = SolutionError(t, y, udata->e, udata);
-    if (check_flag(&flag, "SolutionError", 1)) return 1;
-
-    realtype step_maxerr = N_VMaxNorm(udata->e);
-    if (step_maxerr > udata->emax)
-    {
-      udata -> emax = step_maxerr;
-    }
+    recMaxError(t, y, udata);
 
   }
 
@@ -1057,6 +1078,26 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   return 0;
 }
 
+static int recMaxError(realtype t, N_Vector y, void *user_data)
+{
+  int flag; 
+
+  // Access problem data
+  UserData *udata = (UserData *) user_data;
+
+  // Compute the max error
+  flag = SolutionError(t, y, udata->e, udata);
+  if (check_flag(&flag, "SolutionError", 1)) return 1;
+
+  realtype step_maxerr = N_VMaxNorm(udata->e);
+  if (step_maxerr > udata->emax)
+  {
+    udata -> emax = step_maxerr;
+  }
+
+  return 0;
+}
+
 // Preconditioner setup routine
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
                   booleantype *jcurPtr, realtype gamma, void *user_data)
@@ -1172,7 +1213,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
 
   // Integrator settings
   udata->rtol        = RCONST(1.e-4);   // relative tolerance
-  udata->atol        = RCONST(1.e-4);  // absolute tolerance
+  udata->atol        = RCONST(1.e-4);   // absolute tolerance
   udata->order       = 2;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
@@ -1204,16 +1245,17 @@ static int InitUserData(UserData *udata, SUNContext ctx)
 
   // Xbraid
   udata->x_tol           = 1.0e-4;
+  udata->x_loose_tol     = -1.;
   udata->x_nt            = 64;
   udata->x_skip          = 1;
   udata->x_max_levels    = 16;
-  udata->x_min_coarse    = 3;
+  udata->x_min_coarse    = 2;
   udata->x_nrelax        = 1;
   udata->x_nrelax0       = -1;
   udata->x_tnorm         = 3;
   udata->x_cfactor       = 4;
   udata->x_cfactor0      = -1;
-  udata->x_max_iter      = 100;
+  udata->x_max_iter      = 20;
   udata->x_storage       = -1;
   udata->x_print_level   = 2;
   udata->x_access_level  = 1;
@@ -1228,7 +1270,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_use_theta     = false;
   udata->x_use_ustop     = false;
   udata->x_ustop_cub     = false;
-  udata->x_stage_storage = false;
+  udata->x_stage_storage = true;
 
   // Return success
   return 0;
@@ -1357,6 +1399,10 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->x_tol = stod((*argv)[arg_idx++]);
     }
+    else if (arg == "--x_loose_tol")
+    {
+      udata->x_loose_tol = stod((*argv)[arg_idx++]);
+    }
     else if (arg == "--x_nt")
     {
       udata->x_nt = stoi((*argv)[arg_idx++]);
@@ -1401,9 +1447,9 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->x_storage = stoi((*argv)[arg_idx++]);
     }
-    else if (arg == "--x_stage_storage")
+    else if (arg == "--x_no_stage_stor")
     {
-      udata->x_stage_storage = true;
+      udata->x_stage_storage = false;
     }
     else if (arg == "--x_print_level")
     {
@@ -1580,6 +1626,7 @@ static void InputHelp()
   cout << "  --noprec                : disable preconditioner" << endl;
   cout << "  --msbp <steps>          : max steps between prec setups" << endl;
   cout << "  --x_tol <tol>           : XBraid stopping tolerance" << endl;
+  cout << "  --x_loose_tol <tol>     : loose spatial solver tolerance used for initial iterations" << endl;
   cout << "  --x_nt <nt>             : Initial number of time grid values" << endl;
   cout << "  --x_skip <0,1>          : Skip all work on first down cycle" << endl;
   cout << "  --x_max_levels <max>    : Max number of multigrid levels " << endl;
@@ -1593,7 +1640,7 @@ static void InputHelp()
   cout << "  --x_storage <lev>       : Full storage on levels >= <lev> (use with --x_ustop)" << endl;
   cout << "  --x_ustop               : Use solution from previous MGRIT iteration for implicit stage prediction" << endl;
   cout << "  --x_hermite             : Use cubic Hermite spline interpolation between ustart and ustop (default linear interpolation)" << endl;
-  cout << "  --x_stage_storage       : Store implicit stages for use as initial guess on subsequent calls to Step" << endl;
+  cout << "  --x_no_stage_stor       : Store implicit stages for use as initial guess on subsequent calls to Step" << endl;
   cout << "  --x_print_level <lev>   : Set print level" << endl;
   cout << "  --x_access_level <lev>  : Set access level" << endl;
   cout << "  --x_rfactor_limit <fac> : Max refinement factor" << endl;

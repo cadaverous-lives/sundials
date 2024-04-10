@@ -49,6 +49,12 @@ SUNDIALS_EXPORT int ARKBraid_SetCoarseOrder(braid_App app, int order);
 
 SUNDIALS_EXPORT int ARKBraid_SetFullStorage(braid_App app, braid_Int storage, braid_Int stage_storage);
 
+SUNDIALS_EXPORT int ARKBraid_SetLooseTolFactor(braid_App app, braid_Real loosetol_fac);
+
+SUNDIALS_EXPORT int ARKBraid_SetFineRTol(braid_App app, braid_Real tight_rtol, braid_Real loose_rtol);
+
+SUNDIALS_EXPORT int ARKBraid_SetCoarseRTol(braid_App app, braid_Real rtol);
+
 SUNDIALS_EXPORT int ARKBraid_SetStepFn(braid_App app, braid_PtFcnStep step);
 
 SUNDIALS_EXPORT int ARKBraid_SetInitFn(braid_App app, braid_PtFcnInit init);
@@ -117,6 +123,9 @@ SUNDIALS_EXPORT int ARKBraidTheta_FreeVecData(braid_App app, void *vdata_ptr);
 
 SUNDIALS_EXPORT int ARKBraid_TakeStep(void *arkode_mem, realtype tstart, realtype tstop, 
                                       N_Vector y, N_Vector ystop, int *ark_flag);
+
+SUNDIALS_EXPORT int ARKBraid_GetSpatialAccuracy(braid_StepStatus status, braid_Real loose_tol, 
+                                                braid_Real tight_tol, braid_Real *tol_ptr);
 
 #ifdef __cplusplus
 }
