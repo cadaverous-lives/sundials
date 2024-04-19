@@ -200,7 +200,7 @@ int ARKBraidTheta_InitVecData(braid_App app, void** vdata_ptr)
                                                             content->order_coarse);
   if (num_conditions > 0)
   {
-    vdata->Phi = (realtype*)malloc(num_conditions * sizeof(realtype));
+    vdata->Phi = (realtype*)calloc(num_conditions, sizeof(realtype));
     if (vdata->Phi == NULL) return SUNBRAID_ALLOCFAIL;
     for (size_t i = 0; i < num_conditions; i++) {
       vdata->Phi[i] = ZERO;
@@ -226,6 +226,7 @@ int ARKBraidTheta_FreeVecData(braid_App app, void* vdata_ptr)
     free(vdata->Phi);
     vdata->Phi = NULL;
   }
+
   free(vdata);
   vdata_ptr = NULL;
 

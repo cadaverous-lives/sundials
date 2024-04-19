@@ -13,27 +13,33 @@
  * -----------------------------------------------------------------------------
  * Example problem:
  *
- * The following test simulates a simple anisotropic 2D heat equation,
+ * The following test simulates anisotropic 2D advection diffusion in a square
  *
- *   u_t = kx u_xx + ky u_yy + b,
+ *   u_t = kx u_xx + ky u_yy + αx u_x + αy u_y + b(t),
  *
  * for t in [0, 1] and (x,y) in [0, 1]^2, with initial conditions
  *
- *   u(0,x,y) = sin^2(pi x) sin^2(pi y),
+ *   u(0,x,y) = sin^2(πx) sin^2(πy),
  *
  * stationary boundary conditions
  *
  *   u_t(t,0,y) = u_t(t,1,y) = u_t(t,x,0) = u_t(t,x,1) = 0,
  *
- * and the heat source
+ * and the forcing term
  *
- *   b(t,x,y) = -2 pi sin^2(pi x) sin^2(pi y) sin(pi t) cos(pi t)
- *              - kx 2 pi^2 (cos^2(pi x) - sin^2(pi x)) sin^2(pi y) cos^2(pi t)
- *              - ky 2 pi^2 (cos^2(pi y) - sin^2(pi y)) sin^2(pi x) cos^2(pi t).
+ *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
+ *            - kx 2π^2 cos^2(πt) cos(2πx) sin^2(πy)
+ *            - ky 2π^2 cos^2(πt) sin^2(πx) cos(2πy)
+ *            - αx π cos^2(πt) sin(2πx) sin^2(πy)
+ *            - αy π cos^2(πt) sin^2(πx) sin(2πy).
  *
  * Under this setup, the problem has the analytical solution
  *
  *    u(t,x,y) = sin^2(pi x) sin^2(pi y) cos^2(pi t).
+ *
+ * Without forcing, the Derichlet outflow boundary makes for a numerically 
+ * challenging simulation as the initial sine hump collides with the boundary 
+ * and results in sharp gradients.
  *
  * The spatial derivatives are computed using second-order centered differences,
  * with the data distributed over nx * ny points on a uniform spatial grid. The
@@ -87,6 +93,10 @@ struct UserData
   // Diffusion coefficients in the x and y directions
   realtype kx;
   realtype ky;
+
+  // Advection coefficients in the x and y directions
+  realtype ax;
+  realtype ay;
 
   // Enable/disable forcing
   bool forcing;
@@ -224,6 +234,7 @@ struct UserData
   ofstream uout;   // output file stream
   ofstream eout;   // error file stream
   N_Vector e;      // error vector
+  realtype emax;   // max error norm over whole simulation
 
   // Timing variables
   bool   timing;     // print timings
@@ -283,6 +294,9 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data);
 // Jacobian-vector product function
 static int JTimes(N_Vector v, N_Vector Jv, realtype t, N_Vector y, N_Vector fy,
                   void *user_data, N_Vector tmp);
+
+// function to store maximum error across entire simulation
+static int recMaxError(realtype t, N_Vector y, void *user_data);
 
 // Preconditioner setup and solve functions
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
@@ -585,6 +599,13 @@ int main(int argc, char* argv[])
   {
     flag = ARKStepSetDiagnostics(arkode_mem, diagfp);
     if (check_flag(&flag, "ARKStepSetDiagnostics", 1)) return 1;
+  }
+
+  // Set function to record max error, in case sequential time stepping is used
+  if (udata->x_max_levels <= 1)
+  {
+    flag = ARKStepSetPostprocessStepFn(arkode_mem, recMaxError);
+    if (check_flag(&flag, "ARKStepSetPostprocessStepFn", 1)) return 1;
   }
 
   // ------------------------
@@ -1071,7 +1092,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
       if (index == 0)
       {
         // Each processor outputs subdomain information
-        fname << "heat2d_info."
+        fname << "advdiff2d_info."
               << setfill('0') << setw(5) << udata->myid_c << ".txt";
 
         ofstream dout;
@@ -1098,7 +1119,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
         // Open output streams
         fname.str("");
         fname.clear();
-        fname << "heat2d_solution."
+        fname << "advdiff2d_solution."
               << setfill('0') << setw(5) << udata->myid_c
               << setfill('0') << setw(6) << index / qout << ".txt";
 
@@ -1108,7 +1129,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
 
         fname.str("");
         fname.clear();
-        fname << "heat2d_error."
+        fname << "advdiff2d_error."
               << setfill('0') << setw(5) << udata->myid_c
               << setfill('0') << setw(6) << index / qout << ".txt";
 
@@ -1148,22 +1169,8 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
       }
     }
 
-    // Output final error
-    if (index == ntpts)
-    {
-      // Compute the max error
-      flag = SolutionError(t, y, udata->e, udata);
-      if (check_flag(&flag, "SolutionError", 1)) return 1;
-
-      realtype maxerr = N_VMaxNorm(udata->e);
-
-      if (udata->myid_c == 0)
-      {
-        cout << scientific;
-        cout << setprecision(numeric_limits<realtype>::digits10);
-        cout << "  Max error = " << maxerr << endl << endl;
-      }
-    }
+    // Compute the max error
+    recMaxError(t, y, udata);
   }
 
   // Stop timer
@@ -1214,6 +1221,12 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   realtype cy = udata->ky / (udata->dy * udata->dy);
   realtype cc = -TWO * (cx + cy);
 
+  // Stencil entries
+  realtype posx = cx + udata->ax/udata->dx/2;
+  realtype negx = cx - udata->ax/udata->dx/2;
+  realtype posy = cy + udata->ay/udata->dy/2;
+  realtype negy = cy - udata->ay/udata->dy/2;
+
   // Access data arrays
   realtype *uarray = N_VGetArrayPointer(u);
   if (check_flag((void *) uarray, "N_VGetArrayPointer", 0)) return -1;
@@ -1225,17 +1238,28 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   N_VConst(ZERO, f);
 
   // Iterate over subdomain and compute rhs forcing term
+  /*
+  *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
+  *            - [kx 2π^2 cos^2(πt)] cos(2πx) sin^2(πy)
+  *            - [ky 2π^2 cos^2(πt)] sin^2(πx) cos(2πy)
+  *            - [αx π cos^2(πt)] sin(2πx) sin^2(πy)
+  *            - [αy π cos^2(πt)] sin^2(πx) sin(2πy).
+  */
   if (udata->forcing)
   {
     realtype x, y;
     realtype sin_sqr_x, sin_sqr_y;
     realtype cos_sqr_x, cos_sqr_y;
 
+
+    realtype sin_t = sin(PI * t);
+    realtype cos_t = cos(PI * t);
+    realtype cos_sqr_t = pow(cos_t, 2);
+
     realtype bx = (udata->kx) * TWO * PI * PI;
     realtype by = (udata->ky) * TWO * PI * PI;
-
-    realtype sin_t_cos_t = sin(PI * t) * cos(PI * t);
-    realtype cos_sqr_t   = cos(PI * t) * cos(PI * t);
+    realtype bax = (udata->ax) * PI * cos_sqr_t;
+    realtype bay = (udata->ay) * PI * cos_sqr_t;
 
     for (j = jstart; j < jend; j++)
     {
@@ -1244,16 +1268,15 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
         x = (udata->is + i) * udata->dx;
         y = (udata->js + j) * udata->dy;
 
-        sin_sqr_x = sin(PI * x) * sin(PI * x);
-        sin_sqr_y = sin(PI * y) * sin(PI * y);
-
-        cos_sqr_x = cos(PI * x) * cos(PI * x);
-        cos_sqr_y = cos(PI * y) * cos(PI * y);
+        sin_sqr_x = pow(sin(PI * x), 2);
+        sin_sqr_y = pow(sin(PI * y), 2);
 
         farray[IDX(i,j,nx_loc)] =
-          -TWO * PI * sin_sqr_x * sin_sqr_y * sin_t_cos_t
-          -bx * (cos_sqr_x - sin_sqr_x) * sin_sqr_y * cos_sqr_t
-          -by * (cos_sqr_y - sin_sqr_y) * sin_sqr_x * cos_sqr_t;
+          -TWO*PI * sin_t * cos_t * sin_sqr_x * sin_sqr_y
+          -bx * cos(TWO * PI * x) * sin_sqr_y
+          -by * cos(TWO * PI * y) * sin_sqr_x
+          -bax * sin(TWO * PI * x) * sin_sqr_y
+          -bay * sin(TWO * PI * y) * sin_sqr_x;
       }
     }
   }
@@ -1263,10 +1286,11 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   {
     for (i = 1; i < nx_loc - 1; i++)
     {
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
   }
 
@@ -1274,7 +1298,7 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   flag = WaitRecv(udata);
   if (check_flag(&flag, "WaitRecv", 1)) return -1;
 
-  // Iterate over subdomain boundaries and add rhs diffusion term
+  // Iterate over subdomain boundaries and add rhs term
   realtype *Warray = udata->Wrecv;
   realtype *Earray = udata->Erecv;
   realtype *Sarray = udata->Srecv;
@@ -1287,27 +1311,30 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     if (udata->HaveNbrS)  // South-West corner
     {
       j = 0;
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (Warray[j] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (Sarray[i] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * Warray[j]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * Sarray[i];
     }
 
     for (j = 1; j < ny_loc - 1; j++)
     {
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (Warray[j] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * Warray[j]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
 
     if (udata->HaveNbrN)  // North-West corner
     {
       j = ny_loc - 1;
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (Warray[j] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + Narray[i]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * Warray[j]
+                              +  posy * Narray[i]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
   }
 
@@ -1318,27 +1345,30 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     if (udata->HaveNbrS)  // South-East corner
     {
       j = 0;
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + Earray[j])
-        + cy * (Sarray[i] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * Earray[j]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * Sarray[i];
     }
 
     for (j = 1; j < ny_loc - 1; j++)
     {
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + Earray[j])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * Earray[j]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
 
     if (udata->HaveNbrN)  // North-East corner
     {
       j = ny_loc - 1;
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + Earray[j])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + Narray[i]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * Earray[j]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * Narray[i]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
   }
 
@@ -1348,10 +1378,11 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     j = 0;
     for (i = 1; i < nx_loc - 1; i++)
     {
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (Sarray[i] + uarray[IDX(i,j+1,nx_loc)]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * uarray[IDX(i,j+1,nx_loc)]
+                              +  negy * Sarray[i];
     }
   }
 
@@ -1361,10 +1392,11 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     j = udata->ny_loc - 1;
     for (i = 1; i < nx_loc - 1; i++)
     {
-      farray[IDX(i,j,nx_loc)] +=
-        cc * uarray[IDX(i,j,nx_loc)]
-        + cx * (uarray[IDX(i-1,j,nx_loc)] + uarray[IDX(i+1,j,nx_loc)])
-        + cy * (uarray[IDX(i,j-1,nx_loc)] + Narray[i]);
+      farray[IDX(i,j,nx_loc)] += cc * uarray[IDX(i,j,nx_loc)]
+                              +  posx * uarray[IDX(i+1,j,nx_loc)]
+                              +  negx * uarray[IDX(i-1,j,nx_loc)]
+                              +  posy * Narray[i]
+                              +  negy * uarray[IDX(i,j-1,nx_loc)];
     }
   }
 
@@ -1430,6 +1462,22 @@ static int JTimes(N_Vector v, N_Vector Jv, realtype t, N_Vector y, N_Vector fy,
   return 0;
 }
 
+static int recMaxError(realtype t, N_Vector y, void *user_data)
+{
+  int flag; 
+
+  // Access problem data
+  UserData *udata = (UserData *) user_data;
+
+  // Compute the max error
+  flag = SolutionError(t, y, udata->e, udata);
+  if (check_flag(&flag, "SolutionError", 1)) return 1;
+
+  udata->emax = max(N_VMaxNorm(udata->e), udata->emax);
+
+  return 0;
+}
+
 // Preconditioner setup routine
 static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
                   booleantype *jcurPtr, realtype gamma, void *user_data)
@@ -1489,7 +1537,7 @@ static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
   flag = HYPRE_StructPFMGSetMaxIter(udata->precond, 1);
   if (flag != 0) return -1;
 
-  // Use non-Galerkin corase grid operator
+  // Use non-Galerkin coarse grid operator
   flag = HYPRE_StructPFMGSetRAPType(udata->precond, 1);
   if (flag != 0) return -1;
 
@@ -1801,6 +1849,8 @@ static int Jac(UserData *udata)
     // Jacobian values
     realtype cx = udata->kx / (udata->dx * udata->dx);
     realtype cy = udata->ky / (udata->dy * udata->dy);
+    realtype cax = udata->ax / udata->dx / 2;
+    realtype cay = udata->ay / udata->dy / 2;
     realtype cc = -TWO * (cx + cy);
 
     // --------------------------------
@@ -1814,10 +1864,10 @@ static int Jac(UserData *udata)
       for (ix = 0; ix < nx_loc; ix++)
       {
         work[idx]     = cc;
-        work[idx + 1] = cx;
-        work[idx + 2] = cx;
-        work[idx + 3] = cy;
-        work[idx + 4] = cy;
+        work[idx + 1] = cx - cax;
+        work[idx + 2] = cx + cax;
+        work[idx + 3] = cy - cay;
+        work[idx + 4] = cy + cay;
         idx += 5;
       }
     }
@@ -2357,8 +2407,12 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->kx = ONE;
   udata->ky = ONE;
 
+  // Advection coefficient
+  udata->ax = ONE;
+  udata->ay = ONE;
+
   // Enable forcing
-  udata->forcing = true;
+  udata->forcing = false;
 
   // Final time
   udata->tf = ONE;
@@ -2433,7 +2487,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->diagnostics = false;           // output diagnostics
 
   // Linear solver and preconditioner options
-  udata->pcg       = true;       // use PCG (true) or GMRES (false)
+  udata->pcg       = false;      // use PCG (true) or GMRES (false)
   udata->prec      = true;       // enable preconditioning
   udata->matvec    = false;      // use hypre matrix-vector product
   udata->lsinfo    = false;      // output residual history
@@ -2474,6 +2528,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->output = 1;   // 0 = no output, 1 = stats output, 2 = output to disk
   udata->nout   = 20;  // Number of output times
   udata->e      = NULL;
+  udata->emax   = 0;   // Max error norm over whole simulation
 
   // Timing variables
   udata->timing       = false;
@@ -2601,10 +2656,16 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
       udata->kx = stod((*argv)[arg_idx++]);
       udata->ky = stod((*argv)[arg_idx++]);
     }
-    // Disable forcing
-    else if (arg == "--noforcing")
+    // Diffusion parameters
+    else if (arg == "--a")
     {
-      udata->forcing = false;
+      udata->ax = stod((*argv)[arg_idx++]);
+      udata->ay = stod((*argv)[arg_idx++]);
+    }
+    // Disable forcing
+    else if (arg == "--forcing")
+    {
+      udata->forcing = true;
     }
     // Temporal domain settings
     else if (arg == "--tf")
@@ -2633,9 +2694,9 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
       udata->diagnostics = true;
     }
     // Linear solver settings
-    else if (arg == "--gmres")
+    else if (arg == "--pcg")
     {
-      udata->pcg = false;
+      udata->pcg = true;
     }
     else if (arg == "--matvec")
     {
@@ -2893,17 +2954,18 @@ static void InputHelp()
   cout << endl;
   cout << "Command line options:" << endl;
   cout << "  --mesh <nx> <ny>        : mesh points in the x and y directions" << endl;
-  cout << "  --np <npx> <npy> <npt>  : number of MPI processes in space and time" << endl;
+  cout << "  --np <npx> <npy> <npt>  : number of MPI processes in space and timethe x and y" << endl;
   cout << "  --domain <xu> <yu>      : domain upper bound in the x and y direction" << endl;
   cout << "  --k <kx> <ky>           : diffusion coefficients" << endl;
-  cout << "  --noforcing             : disable forcing term" << endl;
+  cout << "  --a <ax> <ay>           : advection coefficients" << endl;
+  cout << "  --forcing               : enable forcing term" << endl;
   cout << "  --tf <time>             : final time" << endl;
   cout << "  --rtol <rtol>           : relative tolerance" << endl;
   cout << "  --atol <atol>           : absoltue tolerance" << endl;
   cout << "  --nonlinear             : disable linearly implicit flag" << endl;
   cout << "  --order <ord>           : method order" << endl;
   cout << "  --diagnostics           : output diagnostics" << endl;
-  cout << "  --gmres                 : use GMRES linear solver" << endl;
+  cout << "  --pcg                   : use PCG linear solver" << endl;
   cout << "  --matvec                : use hypre matrix-vector product" << endl;
   cout << "  --lsinfo                : output residual history" << endl;
   cout << "  --liniters <iters>      : max number of iterations" << endl;
@@ -2944,7 +3006,7 @@ static void InputHelp()
 static int PrintUserData(UserData *udata)
 {
   cout << endl;
-  cout << "2D Heat PDE test problem:"                     << endl;
+  cout << "2D Advection Diffusion PDE test problem:"      << endl;
   cout << " --------------------------------- "           << endl;
   cout << "  nprocs         = " << udata->nprocs_w        << endl;
   cout << "  npx            = " << udata->npx             << endl;
@@ -2953,6 +3015,8 @@ static int PrintUserData(UserData *udata)
   cout << " --------------------------------- "           << endl;
   cout << "  kx             = " << udata->kx              << endl;
   cout << "  ky             = " << udata->ky              << endl;
+  cout << "  ax             = " << udata->ax              << endl;
+  cout << "  ay             = " << udata->ay              << endl;
   cout << "  forcing        = " << udata->forcing         << endl;
   cout << "  tf             = " << udata->tf              << endl;
   cout << "  xu             = " << udata->xu              << endl;
@@ -3045,9 +3109,14 @@ static int OutputStats(void *arkode_mem, UserData* udata)
   MPI_Allreduce(MPI_IN_PLACE, &nsetups, 1, MPI_LONG, MPI_MAX, udata->comm_w);
   MPI_Allreduce(MPI_IN_PLACE, &nfi_ls,  1, MPI_LONG, MPI_MAX, udata->comm_w);
   MPI_Allreduce(MPI_IN_PLACE, &nJv,     1, MPI_LONG, MPI_MAX, udata->comm_w);
+  MPI_Allreduce(MPI_IN_PLACE, &udata->emax, 1, MPI_DOUBLE, MPI_MAX, udata->comm_w);
 
   if (outproc)
   {
+    cout << scientific;
+    cout << setprecision(numeric_limits<realtype>::digits10);
+    cout << "  Max error = " << udata->emax << endl << endl;
+
     cout << fixed;
     cout << setprecision(6);
 

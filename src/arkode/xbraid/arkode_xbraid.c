@@ -492,7 +492,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   // }
 
   /* Get stored stage initial guess if available */
-  if (grid->stage_zs)
+  if (content->stage_storage && grid->stage_zs)
   {
     /* This allows using stored intermediate stage values 
     from previous calls to step at this time index */

@@ -15,11 +15,11 @@
  *
  * The following test simulates anisotropic 2D advection diffusion in a square
  *
- *   u_t = νx u_xx + νy u_yy + kx u_x + ky u_y + b(t),
+ *   u_t = kx u_xx + ky u_yy + αx u_x + αy u_y + b(t),
  *
  * for t in [0, 1] and (x,y) in [0, 1]^2, with initial conditions
  *
- *   u(0,x,y) = 0,
+ *   u(0,x,y) = sin^2(πx) sin^2(πy),
  *
  * stationary boundary conditions
  *
@@ -27,15 +27,19 @@
  *
  * and the heat source
  *
- *   b(t,x,y) = 6π sin^5(πt) cos(πt) sin^2(πx) sin^2(πy)
- *            - νx 2π^2 sin^6(πt) cos(2πx) sin^2(πy)
- *            - νy 2π^2 sin^6(πt) sin^2(πx) cos(2πy)
- *            - kx π sin^6(πt) sin(2πx) sin^2(πy)
- *            - ky π sin^6(πt) sin^2(πx) sin(2πy).
+ *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
+ *            - kx 2π^2 cos^2(πt) cos(2πx) sin^2(πy)
+ *            - ky 2π^2 cos^2(πt) sin^2(πx) cos(2πy)
+ *            - αx π cos^2(πt) sin(2πx) sin^2(πy)
+ *            - αy π cos^2(πt) sin^2(πx) sin(2πy).
  *
  * Under this setup, the problem has the analytical solution
  *
- *    u(t,x,y) = sin^2(pi x) sin^2(pi y) sin^6(pi t).
+ *    u(t,x,y) = sin^2(πx) sin^2(πy) cos^2(πt).
+ * 
+ * Without forcing, the Derichlet outflow boundary makes for a numerically challenging
+ * simulation as the initial sine hump collides with the boundary and results in sharp
+ * gradients.
  *
  * The second spatial derivatives are computed using fourth-order centered differences,
  * the advection terms are computed using third order upwind differences,
@@ -841,7 +845,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
       if (index == 0)
       {
         ofstream dout;
-        dout.open("heat2d_info.txt");
+        dout.open("advdiff2d_info.txt");
         dout <<  "xu  " << udata->xu << endl;
         dout <<  "yu  " << udata->yu << endl;
         dout <<  "nx  " << udata->nx << endl;
@@ -855,7 +859,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
       {
         // Open output streams
         stringstream fname;
-        fname << "heat2d_solution."
+        fname << "advdiff2d_solution."
               << setfill('0') << setw(6) << index / qout << ".txt";
 
         udata->uout.open(fname.str());
@@ -864,7 +868,7 @@ int MyAccess(braid_App app, braid_Vector u, braid_AccessStatus astatus)
 
         fname.str("");
         fname.clear();
-        fname << "heat2d_error."
+        fname << "advdiff2d_error."
               << setfill('0') << setw(6) << index / qout << ".txt";
 
         udata->eout.open(fname.str());
@@ -961,25 +965,24 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   if (udata->forcing)
   {
     /*
-    *   b(t,x,y) = 6π sin^5(πt) cos(πt) sin^2(πx) sin^2(πy)
-    *            - [νx 2π^2 sin^6(πt)] cos(2πx) sin^2(πy)
-    *            - [νy 2π^2 sin^6(πt)] sin^2(πx) cos(2πy)
-    *            - [kx π sin^6(πt)] sin(2πx) sin^2(πy)
-    *            - [ky π sin^6(πt)] sin^2(πx) sin(2πy).
+    *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
+    *            - kx 2π^2 cos^2(πt) cos(2πx) sin^2(πy)
+    *            - ky 2π^2 cos^2(πt) sin^2(πx) cos(2πy)
+    *            - αx π cos^2(πt) sin(2πx) sin^2(πy)
+    *            - αy π cos^2(πt) sin^2(πx) sin(2πy).
     */
     realtype x, y;
     realtype sin_sqr_x, sin_sqr_y;
 
     realtype sin_t = sin(PI * t);
     realtype cos_t = cos(PI * t);
-    realtype sin5_t = pow(sin_t, 5);
-    realtype sin6_t = pow(sin_t, 6);
+    realtype cos_t_sqr = cos_t*cos_t;
 
-    realtype bx = (udata->kx) * TWO * PI * PI * sin6_t;
-    realtype by = (udata->ky) * TWO * PI * PI * sin6_t;
+    realtype bx = (udata->kx) * TWO * PI * PI * cos_t_sqr;
+    realtype by = (udata->ky) * TWO * PI * PI * cos_t_sqr;
 
-    realtype bax = (udata->ax) * PI * sin6_t;
-    realtype bay = (udata->ay) * PI * sin6_t;
+    realtype bax = (udata->ax) * PI * cos_t_sqr;
+    realtype bay = (udata->ay) * PI * cos_t_sqr;
 
 
     for (sunindextype j = 1; j < ny - 1; j++)
@@ -989,12 +992,11 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
         x  = i * udata->dx;
         y  = j * udata->dy;
 
-        sin_sqr_x = sin(PI * x) * sin(PI * x);
-        sin_sqr_y = sin(PI * y) * sin(PI * y);
-
+        sin_sqr_x = pow(sin(PI * x), 2);
+        sin_sqr_y = pow(sin(PI * y), 2);
 
         farray[IDX(i,j,nx)] =
-          SIX*PI * sin5_t * cos_t * sin_sqr_x * sin_sqr_y
+          -TWO*PI * sin_t * cos_t * sin_sqr_x * sin_sqr_y
           -bx * cos(TWO * PI * x) * sin_sqr_y
           -by * cos(TWO * PI * y) * sin_sqr_x
           -bax * sin(TWO * PI * x) * sin_sqr_y
@@ -1031,25 +1033,35 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
   //   for (sunindextype i = 1; i < nx - 1; i++)
   //   {
   //     // Here we assume the advection coefficients are always positive.
-      // farray[IDX(i,j,nx)] +=
-      //   cax * uarray[IDX(i+1,j,nx)] + cay * uarray[IDX(i,j+1,nx)]
-      //   - (cax + cay) * uarray[IDX(i, j, nx)];
+  //     farray[IDX(i,j,nx)] +=
+  //       cax * uarray[IDX(i+1,j,nx)] + cay * uarray[IDX(i,j+1,nx)]
+  //       - (cax + cay) * uarray[IDX(i, j, nx)];
   //     // farray[IDX(i,j,nx)] += caxy * (uarray[IDX(i+1,j+1,nx)] - uarray[IDX(i, j, nx)]);
   //   }
   // }
-
-  // third order upwinding for advection (letting outside values = 0)
-  // {-1/3, -1/2, 1, -1/6}
+  
+  // second order centered difference for advection
   for (sunindextype j = 1; j < ny - 1; j++)
   {
     for (sunindextype i = 1; i < nx - 1; i++)
     {
-      farray[IDX(i,j,nx)] += cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i-1,j,nx)]/3)
-                           + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i,j-1,nx)]/3);
-      if (i < nx - 2) {farray[IDX(i,j,nx)] -= cax * uarray[IDX(i+2,j,nx)]/6;}
-      if (j < ny - 2) {farray[IDX(i,j,nx)] -= cay * uarray[IDX(i,j+2,nx)]/6;}
+      farray[IDX(i,j,nx)] += cax*(uarray[IDX(i+1,j,nx)] - uarray[IDX(i-1,j,nx)])/2
+                          +  cay*(uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j-1,nx)])/2;
     }
   }
+
+  // third order upwinding for advection (letting outside values = 0)
+  // {-1/3, -1/2, 1, -1/6}
+  // for (sunindextype j = 1; j < ny - 1; j++)
+  // {
+  //   for (sunindextype i = 1; i < nx - 1; i++)
+  //   {
+  //     farray[IDX(i,j,nx)] += cax * (uarray[IDX(i+1,j,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i-1,j,nx)]/3)
+  //                          + cay * (uarray[IDX(i,j+1,nx)] - uarray[IDX(i,j,nx)]/2 - uarray[IDX(i,j-1,nx)]/3);
+  //     if (i < nx - 2) {farray[IDX(i,j,nx)] -= cax * uarray[IDX(i+2,j,nx)]/6;}
+  //     if (j < ny - 2) {farray[IDX(i,j,nx)] -= cay * uarray[IDX(i,j+2,nx)]/6;}
+  //   }
+  // }
 
   // fifth order upwinding
   // {1/20, -1/2, -1/3, 1, -1/4, 1/30}
@@ -1188,7 +1200,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->ay = ONE;
 
   // Enable forcing
-  udata->forcing = true;
+  udata->forcing = false;
 
   // Final time
   udata->tf = ONE;
@@ -1338,9 +1350,9 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
       }
     }
     // Disable forcing
-    else if (arg == "--noforcing")
+    else if (arg == "--forcing")
     {
-      udata->forcing = false;
+      udata->forcing = true;
     }
     // Temporal domain settings
     else if (arg == "--tf")
@@ -1557,14 +1569,17 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
 // -----------------------------------------------------------------------------
 
 // Compute the exact solution
+ /*
+ *    u(t,x,y) = sin^2(pi x) sin^2(pi y) cos^2(pi t).
+ */
 static int Solution(realtype t, N_Vector u, UserData *udata)
 {
   realtype x, y;
-  realtype sin6_t;
+  realtype cos_sqr_t;
   realtype sin_sqr_x, sin_sqr_y;
 
   // Constants for computing solution
-  sin6_t = pow(sin(PI * t), 6);
+  cos_sqr_t = pow(cos(PI * t), 2);
 
   // Initialize u to zero (handles boundary conditions)
   N_VConst(ZERO, u);
@@ -1582,7 +1597,7 @@ static int Solution(realtype t, N_Vector u, UserData *udata)
       sin_sqr_x = sin(PI * x) * sin(PI * x);
       sin_sqr_y = sin(PI * y) * sin(PI * y);
 
-      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * sin6_t;
+      uarray[IDX(i,j,udata->nx)] = sin_sqr_x * sin_sqr_y * cos_sqr_t;
     }
   }
 
@@ -1612,7 +1627,7 @@ static void InputHelp()
   cout << "  --domain <xu> <yu>      : domain upper bound in the x and y direction" << endl;
   cout << "  --k <kx> <ky>           : diffusion coefficients" << endl;
   cout << "  --a <ax> <ay>           : advection coefficients" << endl;
-  cout << "  --noforcing             : disable forcing term" << endl;
+  cout << "  --forcing               : enable forcing term" << endl;
   cout << "  --tf <time>             : final time" << endl;
   cout << "  --rtol <rtol>           : relative tolerance" << endl;
   cout << "  --atol <atol>           : absolute tolerance" << endl;

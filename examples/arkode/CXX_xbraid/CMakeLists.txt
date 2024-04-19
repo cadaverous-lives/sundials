@@ -27,6 +27,7 @@ set(ARKODE_examples
 if(ENABLE_HYPRE AND HYPRE_FOUND)
   set(ARKODE_examples_hypre
     "ark_heat2D_hypre_pfmg_xbraid\;--np 2 1 2 --x_print_level 0\;1\;4\;develop"
+    "ark_advdiff2D_hypre_pfmg_xbraid\;--np 2 1 2 --x_print_level 0\;1\;4\;develop"
     )
 endif()
 
