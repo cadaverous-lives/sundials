@@ -2522,13 +2522,13 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->diagnostics = false;           // output diagnostics
 
   // Linear solver and preconditioner options
-  udata->pcg       = false;      // use PCG (true) or GMRES (false)
-  udata->prec      = true;       // enable preconditioning
-  udata->matvec    = false;      // use hypre matrix-vector product
-  udata->lsinfo    = false;      // output residual history
-  udata->liniters  = 100;        // max linear iterations
-  udata->msbp      = 0;          // use default (20 steps)
-  udata->epslin    = 0.1;       // use default (0.05)
+  udata->pcg       = false; // use PCG (true) or GMRES (false)
+  udata->prec      = true;  // enable preconditioning
+  udata->matvec    = true;  // use hypre matrix-vector product
+  udata->lsinfo    = false; // output residual history
+  udata->liniters  = 100;   // max linear iterations
+  udata->msbp      = 0;     // use default (20 steps)
+  udata->epslin    = 0.1;   // use default (0.05)
 
   // hypre objects
   udata->grid    = NULL;
@@ -2733,9 +2733,9 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->pcg = true;
     }
-    else if (arg == "--matvec")
+    else if (arg == "--nomatvec")
     {
-      udata->matvec = true;
+      udata->matvec = false;
     }
     else if (arg == "--lsinfo")
     {
@@ -2997,7 +2997,7 @@ static void InputHelp()
   cout << "  --order <ord>           : method order" << endl;
   cout << "  --diagnostics           : output diagnostics" << endl;
   cout << "  --pcg                   : use PCG linear solver" << endl;
-  cout << "  --matvec                : use hypre matrix-vector product" << endl;
+  cout << "  --nomatvec              : do not use hypre matrix-vector product" << endl;
   cout << "  --lsinfo                : output residual history" << endl;
   cout << "  --liniters <iters>      : max number of iterations" << endl;
   cout << "  --epslin <factor>       : linear tolerance factor" << endl;
