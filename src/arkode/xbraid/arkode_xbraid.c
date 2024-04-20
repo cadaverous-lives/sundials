@@ -475,7 +475,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Compute theta method order conditions and set Butcher table */
   ARKBraidTheta_StepElemWeights(content, status, u);
 
-  // TODO: set solver tolerance based on MGRIT residual/level
+  // TODO: Improve spatial accuracy routine
   braid_Real step_atol, step_rtol; /* abs and rel solver tolerances for this step   */
   sunrealtype atol, rtol;          /* tolerances set by user in ARKStepSStolerances */
   atol = content->ark_mem->Sabstol;
@@ -505,6 +505,8 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   }
   gotzs    = (grid->num_stages != NULL && grid->num_stages[tir] > 0);
   gotustop = (u != ustop);
+
+  /* TODO: Store linear solvers/preconditioners either per level or per step */
 
   /* Set step tolerances */
   flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);

@@ -27,15 +27,14 @@
  *
  * and the forcing term
  *
- *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
- *            - kx 2π^2 cos^2(πt) cos(2πx) sin^2(πy)
- *            - ky 2π^2 cos^2(πt) sin^2(πx) cos(2πy)
- *            - αx π cos^2(πt) sin(2πx) sin^2(πy)
- *            - αy π cos^2(πt) sin^2(πx) sin(2πy).
+ *   b(t,x,y) = - kx 2π^2 cos(2πx) sin^2(πy)
+ *              - ky 2π^2 sin^2(πx) cos(2πy)
+ *              - αx π sin(2πx) sin^2(πy)
+ *              - αy π sin^2(πx) sin(2πy).
  *
  * Under this setup, the problem has the analytical solution
  *
- *    u(t,x,y) = sin^2(pi x) sin^2(pi y) cos^2(pi t).
+ *    u(t,x,y) = sin^2(pi x) sin^2(pi y).
  *
  * Without forcing, the Derichlet outflow boundary makes for a numerically 
  * challenging simulation as the initial sine hump collides with the boundary 
@@ -581,9 +580,18 @@ int main(int argc, char* argv[])
   // Set adaptive stepping (XBraid with temporal refinement) options
   if (udata->x_refine)
   {
-    // Use I controller
-    flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 0, NULL);
-    if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    if (udata->x_max_levels > 1)
+    {
+      // Use I controller
+      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 0, NULL);
+      if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    }
+    else
+    {
+      // Use PID controller
+      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_PID, 1, 0, NULL);
+      if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
+    }
 
     // Set the step size reduction factor limit (1 / refinement factor limit)
     flag = ARKStepSetMinReduction(arkode_mem, ONE / udata->x_rfactor_limit);
@@ -634,6 +642,19 @@ int main(int argc, char* argv[])
   // Turn on full storage
   flag = ARKBraid_SetFullStorage(app, udata->x_storage, udata->x_stage_storage);
   if (check_flag(&flag, "ARKBraid_SetFullStorage", 1)) return 1;
+
+  if (udata->x_use_ustop)
+  {
+    // Use linear interpolation between ustart and ustop
+    flag = ARKStepSetPredictorMethod(arkode_mem, 6);
+    if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
+    if (udata->x_ustop_cub)
+    {
+      // Use cubic Hermite spline
+      flag = ARKStepSetPredictorMethod(arkode_mem, 7);
+      if (check_flag(&flag, "ARKStepSetPredictorMethod", 1)) return 1;
+    }
+  }
 
   // Initialize the ARKStep + XBraid interface
   flag = ARKBraid_BraidInit(comm_w, udata->comm_t, ZERO, udata->tf,
@@ -722,7 +743,7 @@ int main(int argc, char* argv[])
   if (check_flag(&flag, "braid_SetAccessLevel", 1)) return 1;
 
   if (udata->x_initseq) {
-    flag =  braid_SetSeqSoln(core, 1);
+    flag = braid_SetSeqSoln(core, 1);
     if (check_flag(&flag, "braid_SetSeqSoln", 1)) return 1;
   }
 
@@ -737,10 +758,6 @@ int main(int argc, char* argv[])
     flag = braid_SetMaxRefinements(core, udata->x_max_refine);
     if (check_flag(&flag, "braid_SetMaxRefinements", 1)) return 1;
 
-    // Use F-cycles
-    flag = braid_SetFMG(core);
-    if (check_flag(&flag, "braid_SetFMG", 1)) return 1;
-
     // Increase max levels after refinement
     flag = braid_SetIncrMaxLevels(core);
     if (check_flag(&flag, "braid_SetIncrMaxLevels", 1)) return 1;
@@ -753,15 +770,36 @@ int main(int argc, char* argv[])
   // Start timer
   t1 = MPI_Wtime();
 
-  // Evolve in time
-  flag = braid_Drive(core);
-  if (check_flag(&flag, "braid_Drive", 1)) return 1;
+  if (udata->x_max_levels > 1)
+  {
+    // Evolve in time
+    flag = braid_Drive(core);
+    if (check_flag(&flag, "braid_Drive", 1)) return 1;
+  }
+  else
+  {
+    realtype t     = ZERO;
+    realtype dTout = udata->tf / udata->nout;
+    realtype tout  = dTout;
+
+    for (int iout = 0; iout < udata->nout; iout++)
+    {
+      // Evolve in time
+      flag = ARKStepEvolve(arkode_mem, tout, u, &t, ARK_NORMAL);
+      if (check_flag(&flag, "ARKStepEvolve", 1)) break;
+
+      // Update output time
+      tout += dTout;
+      tout = (tout > udata->tf) ? udata->tf : tout;
+    }
+  }
 
   // Stop timer
   t2 = MPI_Wtime();
 
   // Update timer
   udata->evolvetime += t2 - t1;
+
 
   // --------------
   // Final outputs
@@ -1239,11 +1277,10 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
 
   // Iterate over subdomain and compute rhs forcing term
   /*
-  *   b(t,x,y) = -2π sin(πt) cos(πt) sin^2(πx) sin^2(πy)
-  *            - [kx 2π^2 cos^2(πt)] cos(2πx) sin^2(πy)
-  *            - [ky 2π^2 cos^2(πt)] sin^2(πx) cos(2πy)
-  *            - [αx π cos^2(πt)] sin(2πx) sin^2(πy)
-  *            - [αy π cos^2(πt)] sin^2(πx) sin(2πy).
+  * b(t,x,y) = - kx 2π^2 cos(2πx) sin^2(πy)
+  *            - ky 2π^2 sin^2(πx) cos(2πy)
+  *            - αx π sin(2πx) sin^2(πy)
+  *            - αy π sin^2(πx) sin(2πy).
   */
   if (udata->forcing)
   {
@@ -1251,15 +1288,10 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
     realtype sin_sqr_x, sin_sqr_y;
     realtype cos_sqr_x, cos_sqr_y;
 
-
-    realtype sin_t = sin(PI * t);
-    realtype cos_t = cos(PI * t);
-    realtype cos_sqr_t = pow(cos_t, 2);
-
     realtype bx = (udata->kx) * TWO * PI * PI;
     realtype by = (udata->ky) * TWO * PI * PI;
-    realtype bax = (udata->ax) * PI * cos_sqr_t;
-    realtype bay = (udata->ay) * PI * cos_sqr_t;
+    realtype bax = (udata->ax) * PI;
+    realtype bay = (udata->ay) * PI;
 
     for (j = jstart; j < jend; j++)
     {
@@ -1272,7 +1304,6 @@ static int f(realtype t, N_Vector u, N_Vector f, void *user_data)
         sin_sqr_y = pow(sin(PI * y), 2);
 
         farray[IDX(i,j,nx_loc)] =
-          -TWO*PI * sin_t * cos_t * sin_sqr_x * sin_sqr_y
           -bx * cos(TWO * PI * x) * sin_sqr_y
           -by * cos(TWO * PI * y) * sin_sqr_x
           -bax * sin(TWO * PI * x) * sin_sqr_y
@@ -1849,8 +1880,8 @@ static int Jac(UserData *udata)
     // Jacobian values
     realtype cx = udata->kx / (udata->dx * udata->dx);
     realtype cy = udata->ky / (udata->dy * udata->dy);
-    realtype cax = udata->ax / udata->dx / 2;
-    realtype cay = udata->ay / udata->dy / 2;
+    realtype cax = udata->ax / (2*udata->dx);
+    realtype cay = udata->ay / (2*udata->dy);
     realtype cc = -TWO * (cx + cy);
 
     // --------------------------------
@@ -2493,7 +2524,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->lsinfo    = false;      // output residual history
   udata->liniters  = 100;        // max linear iterations
   udata->msbp      = 0;          // use default (20 steps)
-  udata->epslin    = ZERO;       // use default (0.05)
+  udata->epslin    = 0.1;       // use default (0.05)
 
   // hypre objects
   udata->grid    = NULL;
@@ -2555,9 +2586,9 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_cfactor0      = -1;
   udata->x_max_iter      = 100;
   udata->x_storage       = -1;
-  udata->x_print_level   = 1;
+  udata->x_print_level   = 2;
   udata->x_access_level  = 1;
-  udata->x_rfactor_limit = 10;
+  udata->x_rfactor_limit = 20;
   udata->x_rfactor_fail  = 4;
   udata->x_max_refine    = 8;
   udata->x_fmg           = false;
@@ -2898,11 +2929,7 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
 static int Solution(realtype t, N_Vector u, UserData *udata)
 {
   realtype x, y;
-  realtype cos_sqr_t;
   realtype sin_sqr_x, sin_sqr_y;
-
-  // Constants for computing solution
-  cos_sqr_t = cos(PI * t) * cos(PI * t);
 
   // Initialize u to zero (handles boundary conditions)
   N_VConst(ZERO, u);
@@ -2927,7 +2954,7 @@ static int Solution(realtype t, N_Vector u, UserData *udata)
       sin_sqr_x = sin(PI * x) * sin(PI * x);
       sin_sqr_y = sin(PI * y) * sin(PI * y);
 
-      uarray[IDX(i,j,udata->nx_loc)] = sin_sqr_x * sin_sqr_y * cos_sqr_t;
+      uarray[IDX(i,j,udata->nx_loc)] = sin_sqr_x * sin_sqr_y;
     }
   }
 
