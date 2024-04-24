@@ -1641,7 +1641,7 @@ static void InputHelp()
   cout << "  --x_storage <lev>       : Full storage on levels >= <lev> (use with --x_ustop)" << endl;
   cout << "  --x_ustop               : Use solution from previous MGRIT iteration for implicit stage prediction" << endl;
   cout << "  --x_hermite             : Use cubic Hermite spline interpolation between ustart and ustop (default linear interpolation)" << endl;
-  cout << "  --x_no_stage_stor       : Store implicit stages for use as initial guess on subsequent calls to Step" << endl;
+  cout << "  --x_no_stage_stor       : Turn off storage of implicit stages for use as initial guess on subsequent calls to Step" << endl;
   cout << "  --x_print_level <lev>   : Set print level" << endl;
   cout << "  --x_access_level <lev>  : Set access level" << endl;
   cout << "  --x_rfactor_limit <fac> : Max refinement factor" << endl;

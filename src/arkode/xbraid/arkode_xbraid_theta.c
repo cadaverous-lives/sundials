@@ -63,7 +63,7 @@ int _ARKBraidTheta_GetNumOrderConditions(int fine_order, int coarse_order)
 {
   int num_order_conditions = 0;
 
-  if (coarse_order <= fine_order) return num_order_conditions;
+  // if (coarse_order <= fine_order) return num_order_conditions;
   if (coarse_order >= 2) num_order_conditions += 1;
   if (coarse_order >= 3) num_order_conditions += 2;
   if (coarse_order >= 4) num_order_conditions += 4;
@@ -363,7 +363,7 @@ int ARKBraidTheta_InitHierarchy(braid_App app, braid_SyncStatus sstatus)
 
     /* Elementary weights for fine-grid Butcher table */
     _phi_order2(B->b, B->c, B->stages, &phi[0]);
-    phi[0] -= RCONST(0.5);
+    phi[0] -= RCONST(1.)/RCONST(2.);
 
     if (content->order_coarse >= 3)
     {
@@ -408,11 +408,20 @@ int ARKBraidTheta_InitHierarchy(braid_App app, braid_SyncStatus sstatus)
         phi_m[2] = RCONST(1.)/RCONST(6.) + phi[0]/m + (phi[2] - phi[0])/m/m;
       }
 
-      /* TODO: Support for higher order methods */
       if (content->order_coarse >= 4)
       {
         /* Fourth order */
-        /* ... */
+        phi_m[3] = RCONST(1.)/RCONST(4.) + phi[0]/m + (RCONST(3.)/RCONST(2.))*(phi[1] - phi[0])/m/m
+                 + (phi[3] + phi[0]/RCONST(2.) - RCONST(3.)*phi[1]/RCONST(2.))/m/m/m;
+        phi_m[4] = RCONST(1.)/RCONST(8.) + (RCONST(5.)/RCONST(6.))*phi[0]/m
+                 + (phi[0]*phi[0]/RCONST(2.) - phi[0] + phi[1]/RCONST(2.) + phi[2]/RCONST(2.))/m/m
+                 + (phi[4] - phi[0]*phi[0]/RCONST(2.) + phi[0]/RCONST(6.) - phi[1]/RCONST(2.) - phi[2]/RCONST(2.))/m/m/m;
+        phi_m[5] = RCONST(1.)/RCONST(12.) + (RCONST(2.)/RCONST(3.))*phi[0]/m
+                 + (phi[2] + phi[1]/RCONST(2.) - RCONST(3.)*phi[0]/RCONST(2.))/m/m
+                 + (phi[5] - phi[2] - phi[1]/RCONST(2.) + RCONST(5.)*phi[0]/RCONST(6.))/m/m/m;
+        phi_m[6] = RCONST(1.)/RCONST(24.) + (RCONST(1.)/RCONST(2.))*phi[0]/m
+                 + (phi[2] + phi[0]*phi[0]/RCONST(2.) - phi[0])/m/m
+                 + (phi[6] - phi[2] - phi[0]*phi[0]/RCONST(2.) + phi[0]/RCONST(2.))/m/m/m;
       }
 
       /* Solve order conditions */
@@ -473,6 +482,8 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
     int cfactor;            /* coarsening factor */
     realtype tstart, tstop; /* start and stop time of current step */
     realtype eta, eta_pr;   /* normalized time step sizes       */
+    realtype eta2, eta3, eta4;
+    realtype etapr2, etapr3, etapr4;
     realtype eta_c;         /* predicted normalized coarse step */
 
     /* Get information from XBraid status */
@@ -509,7 +520,7 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
     phi_pr   = content->theta_mem->phi2;
 
     /* Compute elementary weights */
-
+ 
     /* Temporarily copy prior weights */
     for (int i = 0; i < content->num_order_conditions; i++)
       phi_pr[i] = vdata->Phi[i];
@@ -517,28 +528,39 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
     /* These recurrences explained in (upcoming) theta methods paper... */
 
     /* Second order */
+    eta2 = eta*eta;
+
     _phi_order2(B->b, B->c, B->stages, &phi_step[0]);
-    vdata->Phi[0] += eta * eta * phi_step[0] + eta * eta_pr;
+    vdata->Phi[0] += eta2 * phi_step[0] + eta * eta_pr;
 
     /* Third order */
     if (content->order_coarse >= 3)
     {
+      eta3 = eta2*eta;
+      etapr2 = eta_pr*eta_pr;
+
       _phi_order3a(B->b, B->c, B->c, B->stages, &phi_step[1]);
       _phi_order3b(B->b, B->A, B->c, B->stages, &phi_step[2]);
-      vdata->Phi[1] += SUNRpowerI(eta, 3) * phi_step[1] +
-                       RCONST(2.) * eta * eta * eta_pr * phi_step[0] +
-                       eta * eta_pr * eta_pr;
-      vdata->Phi[2] += SUNRpowerI(eta, 3) * phi_step[2] + eta * phi_pr[0] +
-                       eta * eta * eta_pr * phi_step[0];
+      vdata->Phi[1] += eta3 * phi_step[1] + RCONST(2.) * eta_pr * eta2 * phi_step[0] + etapr2 * eta;
+      vdata->Phi[2] += eta * phi_pr[0] + eta3 * phi_step[2] + eta_pr * eta2 * phi_step[0];
     }
 
-    /* TODO: Fourth order */
+    /* Fourth order */
     if (content->order_coarse >= 4)
     {
+      eta4 = eta3*eta;
+      etapr3 = etapr2*eta_pr;
+
       _phi_order4a(B->b, B->c, B->c, B->c, B->stages, &phi_step[3]);
       _phi_order4b(B->b, B->c, B->A, B->c, B->stages, &phi_step[4]);
       _phi_order4c(B->b, B->A, B->c, B->c, B->stages, &phi_step[5]);
       _phi_order4d(B->b, B->A, B->A, B->c, B->stages, &phi_step[6]);
+      vdata->Phi[3] += eta4 * phi_step[3] + RCONST(3.) * eta_pr * eta3 * phi_step[1]
+                    +  RCONST(3.) * etapr2 * eta2 * phi_step[0] + etapr3 * eta;
+      vdata->Phi[4] += eta2 * phi_step[0] * phi_pr[0] + eta4 * phi_step[4] + eta_pr * eta3 * phi_step[1]
+                    +  eta_pr * eta * phi_pr[0] + eta_pr * eta3 * phi_step[2] + etapr2 * eta2 * phi_step[0];
+      vdata->Phi[5] += eta * phi_pr[1] + eta4 * phi_step[5] + RCONST(2.) * eta_pr * eta3 * phi_step[2] + etapr2 * eta2 * phi_step[0];
+      vdata->Phi[6] += eta * phi_pr[2] + eta2 * phi_step[0] * phi_pr[0] + eta4 * phi_step[6] + eta_pr * eta3 * phi_step[2];
     }
     
     /* TODO: Fifth/Sixth order... */
@@ -559,13 +581,22 @@ int ARKBraidTheta_StepElemWeights(ARKBraidContent content,
       eta_c = (tstop - vdata->tprior) / vdata->etascale;
 
       /* Second order */
-      vdata->Phi[0] /= SUNRpowerI(eta_c, 2);
+      vdata->Phi[0] = vdata->Phi[0]/eta_c/eta_c;
 
       /* Third order */
       if (content->order_coarse >= 3)
       {
-        vdata->Phi[1] /= SUNRpowerI(eta_c, 3);
-        vdata->Phi[2] /= SUNRpowerI(eta_c, 3);
+        vdata->Phi[1] = vdata->Phi[1]/eta_c/eta_c/eta_c; 
+        vdata->Phi[2] = vdata->Phi[2]/eta_c/eta_c/eta_c; 
+      }
+
+      /* Fourth order */
+      if (content->order_coarse >= 4)
+      {
+        vdata->Phi[3] = vdata->Phi[3]/eta_c/eta_c/eta_c/eta_c;
+        vdata->Phi[4] = vdata->Phi[4]/eta_c/eta_c/eta_c/eta_c;
+        vdata->Phi[5] = vdata->Phi[5]/eta_c/eta_c/eta_c/eta_c;
+        vdata->Phi[6] = vdata->Phi[6]/eta_c/eta_c/eta_c/eta_c;
       }
 
       /* Solve order conditions (solution in theta_mem->thcur)*/
@@ -661,7 +692,7 @@ int _ARKBraidTheta_GetBTable(ARKBraidContent content, braid_StepStatus status,
   tir = ti - il + 1;
 
   // printf("GetBTable: il=%d, iu=%d, level=%d, ti=%d\n", il, iu, level, ti);
-  if (level == 0 || content->order_coarse <= content->order_fine ||
+  if (level == 0 || !content->use_theta ||
       grid->coarse_btables == NULL || grid->coarse_btables[tir] == NULL)
   {
     /* Use the fine table */

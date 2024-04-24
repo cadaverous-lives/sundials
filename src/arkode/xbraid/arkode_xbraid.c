@@ -71,6 +71,8 @@ int ARKBraid_Create(void* arkode_mem, braid_App* app)
 
   /* Options */
   content->storage         = -1;
+  content->stage_storage   =  0;
+  content->use_theta       =  0;
   content->loose_tol_fac   =  1.;   /* default is same tolerance on every level */
   content->loose_fine_rtol =  1e-3; /* for the coarse grid correction to have at least three    */
   content->tight_fine_rtol =  1e-3; /* digits of accuracy, the tau correction and the coarse    */
@@ -205,6 +207,20 @@ int ARKBraid_Free(braid_App* app)
  * ARKBraid Set Functions
  * ---------------------- */
 
+int ARKBraid_SetTheta(braid_App app, booleantype theta)
+{
+  ARKBraidContent content;
+
+  if (app == NULL) return SUNBRAID_ILLINPUT;
+  if (app->content == NULL) return SUNBRAID_MEMFAIL;
+
+  content = (ARKBraidContent)app->content;
+
+  content->use_theta = theta;
+
+  return SUNBRAID_SUCCESS;
+}
+
 int ARKBraid_SetCoarseOrder(braid_App app, sunindextype order)
 {
   ARKBraidContent content;
@@ -215,9 +231,9 @@ int ARKBraid_SetCoarseOrder(braid_App app, sunindextype order)
   content = (ARKBraidContent)app->content;
 
   /* Check order */
-  if (order < 0 || order > 3) return SUNBRAID_ILLINPUT;
+  if (order < 0 || order > 4) return SUNBRAID_ILLINPUT;
 
-  /* Restore default or set default */
+  /* Restore default or set */
   if (order == 0) content->order_coarse = content->order_fine;
   else content->order_coarse = order;
 
@@ -773,7 +789,7 @@ int ARKBraid_Sync(braid_App app, braid_SyncStatus sstatus)
     }
 
     /* Check that theta method needs computing */
-    if (nlevels > 1 && content->order_coarse > content->order_fine)
+    if (nlevels > 1 && content->use_theta)
     {
       /* Set flag if the first down-cycle will be skipped */
       content->flag_skip_downcycle = (skip && caller == braid_ASCaller_Drive_AfterInit);

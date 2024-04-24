@@ -45,6 +45,8 @@ SUNDIALS_EXPORT int ARKBraid_Free(braid_App *app);
  * ARKBraid Set Functions
  * ---------------------- */
 
+SUNDIALS_EXPORT int ARKBraid_SetTheta(braid_App app, booleantype theta);
+
 SUNDIALS_EXPORT int ARKBraid_SetCoarseOrder(braid_App app, int order);
 
 SUNDIALS_EXPORT int ARKBraid_SetFullStorage(braid_App app, braid_Int storage, braid_Int stage_storage);

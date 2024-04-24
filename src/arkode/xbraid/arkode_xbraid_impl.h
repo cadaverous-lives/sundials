@@ -143,6 +143,7 @@ struct _ARKBraidContent
                  x >= 1: full storage on all levels >= 1 */
   booleantype stage_storage; /* if true, stage values will also be stored for all steps 
                                 on all levels where full storage is set */
+  int use_theta; /* Determines whether a theta method will be used on the coarse grid */
 
   /* Functions provided to XBraid (user may override) */
   braid_PtFcnStep        step;    /* take time step       */

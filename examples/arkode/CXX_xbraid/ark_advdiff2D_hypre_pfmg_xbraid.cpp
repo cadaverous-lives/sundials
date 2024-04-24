@@ -1,5 +1,5 @@
 /* -----------------------------------------------------------------------------
- * Programmer(s): David J. Gardner @ LLNL
+ * Programmer(s): David A. Vargas @ LLNL
  * -----------------------------------------------------------------------------
  * SUNDIALS Copyright Start
  * Copyright (c) 2002-2023, Lawrence Livermore National Security
@@ -252,7 +252,7 @@ struct UserData
   int      x_nt;            // number of fine grid time points
   int      x_skip;          // skip all work on first down cycle
   int      x_max_levels;    // max number of levels
-  int      x_min_coarse;    // min possible coarse gird size
+  int      x_min_coarse;    // min possible coarse grid size
   int      x_nrelax;        // number of CF relaxation sweeps on all levels
   int      x_nrelax0;       // number of CF relaxation sweeps on level 0
   int      x_tnorm;         // temporal stopping norm
@@ -271,6 +271,7 @@ struct UserData
   bool     x_reltol;        // use relative tolerance
   bool     x_init_u0;       // initialize solution to initial condition
   bool     x_use_theta;     // use a higher order method on the coarse grid
+  int      x_coarse_ord;    // used to set the order of the coarse grid method
   bool     x_use_ustop;     // use improved initial guess to initialize implicit stages
   bool     x_ustop_cub;     // use cubic hermite spline interpolation between u and ustop
   bool     x_stage_storage; // store implicit stage solutions as initial guesses for future steps
@@ -639,8 +640,18 @@ int main(int argc, char* argv[])
   // Set the coarse-grid method order
   if (udata->x_use_theta)
   {
-    flag = ARKBraid_SetCoarseOrder(app, udata->order + 1);
-    if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
+    flag = ARKBraid_SetTheta(app, true);
+
+    if (udata->x_coarse_ord > 0)
+    {
+      flag = ARKBraid_SetCoarseOrder(app, udata->x_coarse_ord);
+      if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
+    }
+    else
+    {
+      flag = ARKBraid_SetCoarseOrder(app, udata->order + 1);
+      if (check_flag(&flag, "ARKBraid_SetCoarseOrder", 1)) return 1;
+    }
   }
 
   // Turn on full storage
@@ -1573,7 +1584,7 @@ static int PSetup(realtype t, N_Vector u, N_Vector f, booleantype jok,
   if (flag != 0) return -1;
 
   // Use non-Galerkin coarse grid operator
-  flag = HYPRE_StructPFMGSetRAPType(udata->precond, 1);
+  flag = HYPRE_StructPFMGSetRAPType(udata->precond, 0);
   if (flag != 0) return -1;
 
   // Set the relaxation type
@@ -2601,6 +2612,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_reltol        = false;
   udata->x_init_u0       = false;
   udata->x_use_theta     = false;
+  udata->x_coarse_ord    = 0;
   udata->x_use_ustop     = false;
   udata->x_ustop_cub     = false;
   udata->x_stage_storage = true;
@@ -2868,6 +2880,10 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->x_use_theta = true;
     }
+    else if (arg == "--x_coarse_ord")
+    {
+      udata->x_coarse_ord = stoi((*argv)[arg_idx++]);
+    }
     else if (arg == "--x_ustop")
     {
       udata->x_use_ustop = true;
@@ -3027,6 +3043,10 @@ static void InputHelp()
   cout << "  --x_initseq             : Initialize with sequential solution (debug)" << endl;
   cout << "  --x_reltol              : Use relative stopping tolerance" << endl;
   cout << "  --x_init_u0             : Initialize all times with u0" << endl;
+  cout << "  --x_theta               : use theta method on coarse grid" << endl;
+  cout << "  --x_coarse_ord          : order of coarse grid theta method" << endl;
+  cout << "  --x_ustop               : use stored solution values from previous iters for implicit stage prediction" << endl;
+  cout << "  --x_hermite             : use cubic Hermite spline interpolation for this prediction (default: linear interpolation)" << endl;
   cout << "  --output <level>        : output level" << endl;
   cout << "  --nout <nout>           : number of outputs" << endl;
   cout << "  --timing                : print timing data" << endl;
