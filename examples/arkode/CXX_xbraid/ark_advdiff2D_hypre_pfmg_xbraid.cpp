@@ -3234,21 +3234,21 @@ static int OutputTiming(UserData *udata)
              udata->comm_w);
   if (outproc)
   {
-    cout << "  Evolve time   = " << maxtime << " sec" << endl;
+    cout << "  Evolve time   = " << maxtime << endl;
   }
 
   MPI_Reduce(&(udata->rhstime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
              udata->comm_w);
   if (outproc)
   {
-    cout << "  RHS time      = " << maxtime << " sec" << endl;
+    cout << "  RHS time      = " << maxtime << endl;
   }
 
   MPI_Reduce(&(udata->exchangetime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
              udata->comm_w);
   if (outproc)
   {
-    cout << "  Exchange time = " << maxtime << " sec" << endl;
+    cout << "  Exchange time = " << maxtime << endl;
     cout << endl;
   }
 
@@ -3258,7 +3258,7 @@ static int OutputTiming(UserData *udata)
                udata->comm_w);
     if (outproc)
     {
-      cout << "  Jv time       = " << maxtime << " sec" << endl;
+      cout << "  Jv time       = " << maxtime << endl;
     }
   }
 
@@ -3268,21 +3268,21 @@ static int OutputTiming(UserData *udata)
                udata->comm_w);
     if (outproc)
     {
-      cout << "  MatFill time  = " << maxtime << " sec" << endl;
+      cout << "  MatFill time  = " << maxtime << endl;
     }
 
     MPI_Reduce(&(udata->psetuptime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
                udata->comm_w);
     if (outproc)
     {
-      cout << "  PSetup time   = " << maxtime << " sec" << endl;
+      cout << "  PSetup time   = " << maxtime << endl;
     }
 
     MPI_Reduce(&(udata->psolvetime), &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0,
                udata->comm_w);
     if (outproc)
     {
-      cout << "  PSolve time   = " << maxtime << " sec" << endl;
+      cout << "  PSolve time   = " << maxtime << endl;
       cout << endl;
     }
   }
@@ -3291,7 +3291,7 @@ static int OutputTiming(UserData *udata)
              udata->comm_w);
   if (outproc)
   {
-    cout << "  Access time   = " << maxtime << " sec" << endl;
+    cout << "  Access time   = " << maxtime << endl;
     cout << endl;
   }
 
