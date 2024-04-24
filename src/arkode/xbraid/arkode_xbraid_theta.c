@@ -1030,6 +1030,7 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidThetaOrdCondsMe
     mem->btable_b = _theta_sdirk4_btable_b;
     mem->btable_c = _theta_sdirk4_btable_c;
     mem->init = _theta_sdirk4_guess;
+    mem->alt_init = _theta_sdirk4_altguess;
     _theta_sdirk4_guess(NV_DATA_S(mem->th0));
     _theta_sdirk4_guess(NV_DATA_S(mem->thcur));
     break;
