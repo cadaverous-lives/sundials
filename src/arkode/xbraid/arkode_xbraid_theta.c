@@ -1007,20 +1007,28 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidThetaOrdCondsMe
     mem->btable_b = _theta_sdirk2_btable_b;
     mem->btable_c = _theta_sdirk2_btable_c;
     mem->init = _theta_sdirk2_guess;
-    _theta_sdirk2_guess(NV_DATA_S(mem->th0));
-    _theta_sdirk2_guess(NV_DATA_S(mem->thcur));
+    mem->init(NV_DATA_S(mem->th0));
+    mem->init(NV_DATA_S(mem->thcur));
     break;
   case 3:
-    mem->nstages = _theta_sdirk3_btable_ns;
-    mem->res = _theta_sdirk3_res;
-    mem->jac = _theta_sdirk3_jac;
-    mem->btable_A = _theta_sdirk3_btable_A;
-    mem->btable_b = _theta_sdirk3_btable_b;
-    mem->btable_c = _theta_sdirk3_btable_c;
-    mem->init = _theta_sdirk3_guess;
-    mem->alt_init = _theta_sdirk3_altguess;
-    _theta_sdirk3_guess(NV_DATA_S(mem->th0));
-    _theta_sdirk3_guess(NV_DATA_S(mem->thcur));
+    // mem->nstages = _theta_sdirk3_btable_ns;
+    // mem->res = _theta_sdirk3_res;
+    // mem->jac = _theta_sdirk3_jac;
+    // mem->btable_A = _theta_sdirk3_btable_A;
+    // mem->btable_b = _theta_sdirk3_btable_b;
+    // mem->btable_c = _theta_sdirk3_btable_c;
+    // mem->init = _theta_sdirk3_guess;
+    // mem->alt_init = _theta_sdirk3_altguess;
+    mem->nstages = _theta_esdirk43_btable_ns;
+    mem->res = _theta_esdirk43_res;
+    mem->jac = _theta_esdirk43_jac;
+    mem->btable_A = _theta_esdirk43_btable_A;
+    mem->btable_b = _theta_esdirk43_btable_b;
+    mem->btable_c = _theta_esdirk43_btable_c;
+    mem->init = _theta_esdirk43_guess;
+    mem->alt_init = _theta_esdirk43_altguess;
+    mem->init(NV_DATA_S(mem->th0));
+    mem->init(NV_DATA_S(mem->thcur));
     break;
   case 4:
     mem->nstages = _theta_sdirk4_btable_ns;
@@ -1031,8 +1039,8 @@ int ARKBraidTheta_NlsMem_Create(ARKBraidContent content, ARKBraidThetaOrdCondsMe
     mem->btable_c = _theta_sdirk4_btable_c;
     mem->init = _theta_sdirk4_guess;
     mem->alt_init = _theta_sdirk4_altguess;
-    _theta_sdirk4_guess(NV_DATA_S(mem->th0));
-    _theta_sdirk4_guess(NV_DATA_S(mem->thcur));
+    mem->init(NV_DATA_S(mem->th0));
+    mem->init(NV_DATA_S(mem->thcur));
     break;
   default: return SUNBRAID_ILLINPUT;
   }
