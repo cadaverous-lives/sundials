@@ -577,13 +577,35 @@ int _theta_sdirk4_altguess(sunrealtype* guess, const sunindextype resets)
     break;
 
   case 1:
-    guess[0] = RCONST(0.25);
-    guess[1] = RCONST(-0.04);
-    guess[2] = RCONST(-0.05036764705882353);
-    guess[3] = RCONST(0.027573529411764705);
-    guess[4] = RCONST(-1.0208333333333333);
-    guess[5] = RCONST(7.8125);
-    guess[6] = RCONST(-7.083333333333333);
+    guess[0] = RCONST(0.29853962542090556);
+    guess[1] = RCONST(-0.05201351218882994);
+    guess[2] = RCONST(0.06924210330453612);
+    guess[3] = RCONST(-0.12267418821469801);
+    guess[4] = RCONST(-0.7989440674058907);
+    guess[5] = RCONST(1.9311364975607757);
+    guess[6] = RCONST(2.6302981364383395);
+    flag = SUNTRUE;
+    break;
+
+  case 2:
+    guess[0] = RCONST(0.3301588436719133);
+    guess[1] = RCONST(-0.006062069278850258);
+    guess[2] = RCONST(0.06297006623038928);
+    guess[3] = RCONST(-0.20158714022850135);
+    guess[4] = RCONST(-1.0283564480934906);
+    guess[5] = RCONST(2.607620886448648);
+    guess[6] = RCONST(2.5270480699672824);
+    flag = SUNTRUE;
+    break;
+
+  case 3:
+    guess[0] = RCONST(0.38753450174226617);
+    guess[1] = RCONST(0.07875590309267486);
+    guess[2] = RCONST(-0.025338797499929695);
+    guess[3] = RCONST(-0.3830337568616932);
+    guess[4] = RCONST(-1.758095274336009);
+    guess[5] = RCONST(5.238084697035685);
+    guess[6] = RCONST(2.8760725795882935);
     flag = SUNTRUE;
     break;
 

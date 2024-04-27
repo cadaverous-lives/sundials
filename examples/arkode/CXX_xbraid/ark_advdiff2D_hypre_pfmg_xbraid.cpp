@@ -196,6 +196,7 @@ struct UserData
   int      liniters;  // number of linear iterations
   int      msbp;      // max number of steps between preconditioner setups
   realtype epslin;    // linear solver tolerance factor
+  realtype nlscoef;   // nonlinear solver tolerance factor
 
   // hypre objects
   HYPRE_StructGrid    grid;
@@ -418,6 +419,12 @@ int main(int argc, char* argv[])
   flag = ReadInputs(&argc, &argv, udata, outproc);
   if (flag != 0) return 1;
 
+  // Adjust spatial solver tolerance
+  if (udata->x_max_levels > 1)
+  {
+    udata->nlscoef *= (udata->x_tol/udata->atol);
+  }
+
   // Setup parallel decomposition
   flag = SetupDecomp(comm_w, udata);
   if (check_flag(&flag, "SetupDecomp", 1)) return 1;
@@ -548,6 +555,10 @@ int main(int argc, char* argv[])
   // Set linear solver tolerance factor
   flag = ARKStepSetEpsLin(arkode_mem, udata->epslin);
   if (check_flag(&flag, "ARKStepSetEpsLin", 1)) return 1;
+
+  // Set nonlinear solver tolerance factor
+  flag = ARKStepSetNonlinConvCoef(arkode_mem, udata->nlscoef);
+  if (check_flag(&flag, "ARKStepSetNonlinConvCoef", 1)) return 1;
 
   // Select method order
   if (udata->order > 1)
@@ -2526,8 +2537,8 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->ipN = -1;
 
   // Integrator settings
-  udata->rtol        = RCONST(1.e-5);   // relative tolerance
-  udata->atol        = RCONST(1.e-10);  // absolute tolerance
+  udata->rtol        = RCONST(1.e-6);   // relative tolerance
+  udata->atol        = RCONST(1.e-8);  // absolute tolerance
   udata->order       = 2;               // method order
   udata->linear      = true;            // linearly implicit problem
   udata->diagnostics = false;           // output diagnostics
@@ -2539,7 +2550,8 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->lsinfo    = false; // output residual history
   udata->liniters  = 100;   // max linear iterations
   udata->msbp      = 0;     // use default (20 steps)
-  udata->epslin    = 0.1;   // use default (0.05)
+  udata->epslin    = 0.05;  // use default (0.05)
+  udata->nlscoef   = 0.1;   // use default (0.1)
 
   // hypre objects
   udata->grid    = NULL;
@@ -2588,7 +2600,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->accesstime   = 0.0;
 
   // Xbraid
-  udata->x_tol           = 1.0e-6;
+  udata->x_tol           = 1.0e-8;
   udata->x_loose_tol     = -1.;
   udata->x_nt            = 300;
   udata->x_skip          = 1;
@@ -2599,7 +2611,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_tnorm         = 2;
   udata->x_cfactor       = 4;
   udata->x_cfactor0      = -1;
-  udata->x_max_iter      = 100;
+  udata->x_max_iter      = 20;
   udata->x_storage       = -1;
   udata->x_print_level   = 2;
   udata->x_access_level  = 1;
@@ -2760,6 +2772,10 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     else if (arg == "--epslin")
     {
       udata->epslin = stod((*argv)[arg_idx++]);
+    }
+    else if (arg == "--nlscoef")
+    {
+      udata->nlscoef = stod((*argv)[arg_idx++]);
     }
     // Preconditioner settings
     else if (arg == "--noprec")
@@ -3017,6 +3033,7 @@ static void InputHelp()
   cout << "  --lsinfo                : output residual history" << endl;
   cout << "  --liniters <iters>      : max number of iterations" << endl;
   cout << "  --epslin <factor>       : linear tolerance factor" << endl;
+  cout << "  --nlscoef <factor>      : nonlinear tolerance factor" << endl;
   cout << "  --noprec                : disable preconditioner" << endl;
   cout << "  --msbp <steps>          : max steps between prec setups" << endl;
   cout << "  --pfmg_relax <types>    : relaxtion type in PFMG" << endl;
@@ -3095,6 +3112,7 @@ static int PrintUserData(UserData *udata)
   cout << "  lin iters      = " << udata->liniters        << endl;
   cout << "  matvec         = " << udata->matvec          << endl;
   cout << "  eps lin        = " << udata->epslin          << endl;
+  cout << "  nlscoef        = " << udata->nlscoef         << endl;
   cout << "  prec           = " << udata->prec            << endl;
   cout << "  msbp           = " << udata->msbp            << endl;
   cout << "  pfmg_relax     = " << udata->pfmg_relax      << endl;
