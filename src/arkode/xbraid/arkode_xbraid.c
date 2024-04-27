@@ -518,6 +518,8 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   sunrealtype tight_tol_lvl = SUNRpowerI(10., tlvl*2)*nlsfac;
   // sunrealtype tight_tol_lvl = nlsfac;
 
+  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*atol, atol, &step_atol);
+  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*rtol, rtol, &step_rtol);
   ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*nlsfac, nlsfac, &step_nlsfac);
 
   /* Get stored stage initial guess if available */
@@ -538,10 +540,10 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* TODO: Store linear solvers/preconditioners either per level or per step */
 
   /* Set step tolerances */
-  // flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);
-  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
-  flag = ARKStepSetNonlinConvCoef(content->ark_mem, step_nlsfac);
+  flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+  // flag = ARKStepSetNonlinConvCoef(content->ark_mem, step_nlsfac);
+  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Turn off error estimation when not needed */
   if (!fixedstep && !needrfac)
@@ -570,10 +572,10 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
     arkSetFixedStep(content->ark_mem, ZERO);
 
   /* Restore step tolerances */
-  // flag = ARKStepSStolerances(content->ark_mem, rtol, atol);
-  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
-  flag = ARKStepSetNonlinConvCoef(content->ark_mem, nlsfac);
+  flag = ARKStepSStolerances(content->ark_mem, rtol, atol);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+  // flag = ARKStepSetNonlinConvCoef(content->ark_mem, nlsfac);
+  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Retrieve updated intermediate stages */
   if (grid->stage_zs)
