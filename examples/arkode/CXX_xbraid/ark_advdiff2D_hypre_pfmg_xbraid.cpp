@@ -276,6 +276,7 @@ struct UserData
   bool     x_use_ustop;     // use improved initial guess to initialize implicit stages
   bool     x_ustop_cub;     // use cubic hermite spline interpolation between u and ustop
   bool     x_stage_storage; // store implicit stage solutions as initial guesses for future steps
+  bool     x_timing;        // turn on detailed timing of XBraid cycle
 };
 
 // -----------------------------------------------------------------------------
@@ -723,6 +724,12 @@ int main(int argc, char* argv[])
     }
     flag = braid_SetAbsTol(core, udata->x_tol * tolfactor);
     if (check_flag(&flag, "braid_SetAbsTol", 1)) return 1;
+  }
+
+  if (udata->x_timing)
+  {
+    flag = braid_SetTimings(core, 2);
+    if (check_flag(&flag, "braid_SetTimings", 1)) return 1;
   }
 
   flag = braid_SetSkip(core, udata->x_skip);
@@ -2628,6 +2635,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_use_ustop     = false;
   udata->x_ustop_cub     = false;
   udata->x_stage_storage = true;
+  udata->x_timing        = false;
 
   // Return success
   return 0;
@@ -2908,6 +2916,10 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     {
       udata->x_ustop_cub = true;
     }
+    else if (arg == "--x_timing")
+    {
+      udata->x_timing = true;
+    }
     // Output settings
     else if (arg == "--output")
     {
@@ -3064,6 +3076,7 @@ static void InputHelp()
   cout << "  --x_coarse_ord          : order of coarse grid theta method" << endl;
   cout << "  --x_ustop               : use stored solution values from previous iters for implicit stage prediction" << endl;
   cout << "  --x_hermite             : use cubic Hermite spline interpolation for this prediction (default: linear interpolation)" << endl;
+  cout << "  --x_timing              : print timing data for XBraid cycle" << endl;
   cout << "  --output <level>        : output level" << endl;
   cout << "  --nout <nout>           : number of outputs" << endl;
   cout << "  --timing                : print timing data" << endl;
