@@ -1070,7 +1070,9 @@ int arkStep_GetGammas(void* arkode_mem, realtype *gamma,
     solvers (if applicable)
   - initializes and sets up the nonlinear solver (if applicable)
 
-  With initialization type RESET_INIT, this routine does nothing.
+  With initialization type RESET_INIT, this routine sets the method
+  and embedding orders for adaptive time-stepping in case they have
+  changed.
   ---------------------------------------------------------------*/
 int arkStep_Init(void* arkode_mem, int init_type)
 {
@@ -1084,8 +1086,18 @@ int arkStep_Init(void* arkode_mem, int init_type)
                                  &ark_mem, &step_mem);
   if (retval != ARK_SUCCESS)  return(retval);
 
-  /* immediately return if reset */
-  if (init_type == RESET_INIT) return(ARK_SUCCESS);
+  if (init_type == RESET_INIT) {
+    /* Retrieve/store method and embedding orders in case they have changed */
+    if (step_mem->Bi != NULL) {
+      step_mem->q = ark_mem->hadapt_mem->q = step_mem->Bi->q;
+      step_mem->p = ark_mem->hadapt_mem->p = step_mem->Bi->p;
+    } else {
+      step_mem->q = ark_mem->hadapt_mem->q = step_mem->Be->q;
+      step_mem->p = ark_mem->hadapt_mem->p = step_mem->Be->p;
+    }
+
+    return(ARK_SUCCESS);
+  }
 
   /* initializations/checks for (re-)initialization call */
   if (init_type == FIRST_INIT) {
@@ -1868,6 +1880,8 @@ int arkStep_TakeStep_Z(void* arkode_mem, realtype *dsmPtr, int *nflagPtr)
                      "ycur =", "");
   N_VPrintFile(ark_mem->ycur, ARK_LOGGER->debug_fp);
 #endif
+
+  step_mem->cvals[0] = *dsmPtr;
 
   /* solver diagnostics reporting */
   if (ark_mem->report)

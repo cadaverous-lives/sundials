@@ -504,6 +504,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   braid_Real step_atol, step_rtol; /* abs and rel solver tolerances for this step   */
   sunrealtype atol, rtol;          /* tolerances set by user in ARKStepSStolerances */
   sunrealtype nlsfac, step_nlsfac; /* spatial solver tolerance scaling factor */
+  braid_Real step_tolfac;
 
   step_nlsfac = nlsfac = step_mem->nlscoef;
   atol = content->ark_mem->Sabstol;
@@ -512,15 +513,10 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   /* Adjust tolerances */
 
-  /* progressive tolerance based on level */
-  sunrealtype tlvl = (sunrealtype)level/(nlevels-1);
-  // sunrealtype tight_tol_lvl = SUNRpowerR(nlsfac, ONE-tlvl) * SUNRpowerR(nlsfac, tlvl);
-  sunrealtype tight_tol_lvl = SUNRpowerI(10., tlvl*2)*nlsfac;
-  // sunrealtype tight_tol_lvl = nlsfac;
-
-  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*atol, atol, &step_atol);
-  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*rtol, rtol, &step_rtol);
-  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac*nlsfac, nlsfac, &step_nlsfac);
+  ARKBraid_GetSpatialAccuracy(status, content->loose_tol_fac, ONE, &step_tolfac);
+  step_atol = step_tolfac*atol;
+  step_rtol = step_tolfac*rtol;
+  step_nlsfac = step_tolfac*nlsfac;
 
   /* Get stored stage initial guess if available */
   if (content->stage_storage && grid->stage_zs)
@@ -540,10 +536,10 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* TODO: Store linear solvers/preconditioners either per level or per step */
 
   /* Set step tolerances */
-  flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);
-  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
-  // flag = ARKStepSetNonlinConvCoef(content->ark_mem, step_nlsfac);
+  // flag = ARKStepSStolerances(content->ark_mem, step_rtol, step_atol);
   // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+  flag = ARKStepSetNonlinConvCoef(content->ark_mem, step_nlsfac);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Turn off error estimation when not needed */
   if (!fixedstep && !needrfac)
@@ -564,7 +560,6 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
 
   // if (level == nlevels-1 && caller == braid_ASCaller_FInterp)
   //   printf("Level: %d, ti: %d, z: %d, nlstol: %f, liters: %d\n", level, ti, gotzs, step_nlsfac, liters_stop-liters_start);
-    
 
   /* Restore adaptivity setting */
   if (!fixedstep && !needrfac)
@@ -574,8 +569,8 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Restore step tolerances */
   flag = ARKStepSStolerances(content->ark_mem, rtol, atol);
   CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
-  // flag = ARKStepSetNonlinConvCoef(content->ark_mem, nlsfac);
-  // CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
+  flag = ARKStepSetNonlinConvCoef(content->ark_mem, nlsfac);
+  CHECK_ARKODE_RETURN(content->last_flag_arkode, flag);
 
   /* Retrieve updated intermediate stages */
   if (grid->stage_zs)
@@ -587,7 +582,7 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
   /* Refine grid */
 
   /* Compute refinement factor */
-  if (iter > 1 && needrfac)
+  if (iter > 0 && needrfac)
   {
     // TODO: only refine when residual sufficiently small?
 
@@ -609,9 +604,21 @@ int ARKBraid_Step(braid_App app, braid_Vector ustop, braid_Vector fstop,
       rfac = (rfac < 1) ? 1 : rfac;
     }
 
+    // int done;
+    // sunrealtype dsm = step_mem->cvals[0];
+    // int nrefine;
+    // braid_StepStatusGetNRefine(status, &nrefine);
+    // if (dsm > RCONST(.9999) && rfac == 1)
+    // if (dsm > RCONST(.99999))
+    // {
+    //   printf("Refine: iter: %d, ti: %d, dsm: %.6e, eta: %.6e\n", iter+nrefine, ti, dsm, content->ark_mem->eta);
+    // }
+
     /* set the refinement factor */
     // if (rfac > 1)
-    //   printf("Refine: ti: %d, rfactor=%d\n", ti, rfac);
+    //   printf("Refine: iter: %d, ti: %d, dsm: %.6e, eta: %.6e, adapt_q,p: %d,%d\n", iter, ti, dsm, content->ark_mem->eta, hadapt_mem->q, hadapt_mem->p);
+      // printf("Refine: iter: %d, ti: %d, B->q,p,s: %d,%d,%d\n", iter, ti, step_mem->Bi->q, step_mem->Bi->p, step_mem->Bi->stages);
+      // printf("Refine: iter: %d, ti: %d, B->q,p,s: %d,%d,%d\n", iter, ti, step_mem->q, step_mem->p, step_mem->Bi->stages);
     braid_flag = braid_StepStatusSetRFactor(status, rfac);
     CHECK_BRAID_RETURN(content->last_flag_braid, braid_flag);
   }
@@ -1032,10 +1039,17 @@ int ARKBraid_GetSpatialAccuracy(braid_StepStatus  status, braid_Real loose_tol,
    }
 
    /* Store this tolerance */
-  //  if (level == 0)
-  //  {
-    braid_StepStatusSetOldFineTolx(status, (*tol_ptr));
-  //  }
+  braid_StepStatusSetOldFineTolx(status, (*tol_ptr));
+
+  /* If we've reached the "tight tolerance", then indicate to Braid that we can halt */
+  // if ( *tol_ptr == tight_tol )
+  // {
+  //   braid_StepStatusSetTightFineTolx(status, 1);
+  // }
+  // else
+  // {
+  //   braid_StepStatusSetTightFineTolx(status, 0);
+  // }
 
    free(rnorms);
    /* printf( "lev: %d, accuracy: %1.2e, nreq: %d, rnorm: %1.2e, rnorm0: %1.2e, loose: %1.2e, tight: %1.2e, old: %1.2e, braid_tol: %1.2e \n", level, *tol_ptr, nrequest, rnorm, rnorm0, loose_tol, tight_tol, old_fine_tolx, tol); */

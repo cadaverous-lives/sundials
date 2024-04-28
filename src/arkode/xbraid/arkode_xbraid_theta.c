@@ -660,8 +660,8 @@ int _ARKBraidTheta_SetBtable(ARKodeButcherTable B, ARKBraidContent content,
   theta_mem->btable_b(B->b, theta);
   theta_mem->btable_c(B->c, theta);
 
-  B->q = content->order_fine;
-  B->p = content->order_fine;
+  B->q = content->order_fine; // method
+  B->p = 0;                   // embedding
 
   for (int i = 0; i < ns; i++) {
     for (int j = 0; j < ns; j++) { 

@@ -276,7 +276,7 @@ struct UserData
   bool     x_use_ustop;     // use improved initial guess to initialize implicit stages
   bool     x_ustop_cub;     // use cubic hermite spline interpolation between u and ustop
   bool     x_stage_storage; // store implicit stage solutions as initial guesses for future steps
-  bool     x_timing;        // turn on detailed timing of XBraid cycle
+  int      x_timing;        // XBraid cycle timing level (0 none, 1 iterations, 2 timing file)
 };
 
 // -----------------------------------------------------------------------------
@@ -600,7 +600,7 @@ int main(int argc, char* argv[])
     if (udata->x_max_levels > 1)
     {
       // Use I controller
-      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 0, NULL);
+      flag = ARKStepSetAdaptivityMethod(arkode_mem, ARK_ADAPT_I, 1, 1, NULL);
       if (check_flag(&flag, "ARKStepSetAdaptivityMethod", 1)) return 1;
     }
     else
@@ -726,11 +726,8 @@ int main(int argc, char* argv[])
     if (check_flag(&flag, "braid_SetAbsTol", 1)) return 1;
   }
 
-  if (udata->x_timing)
-  {
-    flag = braid_SetTimings(core, 2);
-    if (check_flag(&flag, "braid_SetTimings", 1)) return 1;
-  }
+  flag = braid_SetTimings(core, udata->x_timing);
+  if (check_flag(&flag, "braid_SetTimings", 1)) return 1;
 
   flag = braid_SetSkip(core, udata->x_skip);
   if (check_flag(&flag, "braid_SetSkip", 1)) return 1;
@@ -900,8 +897,16 @@ static int SetupDecomp(MPI_Comm comm_w, UserData *udata)
   // Check the processor grid
   if ((udata->npx * udata->npy * udata->npt) != udata->nprocs_w)
   {
-    cerr << "Error: npx * npy * npt != nproc" << endl;
-    return -1;
+    // Default to use all procs in time
+    if (udata->npx * udata->npy == 1)
+    {
+      udata->npt = udata->nprocs_w;
+    }
+    else
+    {
+      cerr << "Error: npx * npy * npt != nproc" << endl;
+      return -1;
+    }
   }
 
   // Store global communicator
@@ -1100,9 +1105,9 @@ int MyInit(braid_App app, realtype t, braid_Vector *u_ptr)
   if (flag != 0) return 1;
 
   // Set initial solution at all time points
-  if (t == ZERO)
+  if (t == ZERO || udata->x_init_u0)
   {
-    flag = Solution(t, y, udata);
+    flag = Solution(ZERO, y, udata);
     if (flag != 0) return 1;
   }
   else
@@ -2610,7 +2615,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_tol           = 1.0e-8;
   udata->x_loose_tol     = -1.;
   udata->x_nt            = 300;
-  udata->x_skip          = 1;
+  udata->x_skip          = 0;
   udata->x_max_levels    = 15;
   udata->x_min_coarse    = 3;
   udata->x_nrelax        = 1;
@@ -2635,7 +2640,7 @@ static int InitUserData(UserData *udata, SUNContext ctx)
   udata->x_use_ustop     = false;
   udata->x_ustop_cub     = false;
   udata->x_stage_storage = true;
-  udata->x_timing        = false;
+  udata->x_timing        = 1;
 
   // Return success
   return 0;
@@ -2918,7 +2923,7 @@ static int ReadInputs(int *argc, char ***argv, UserData *udata, bool outproc)
     }
     else if (arg == "--x_timing")
     {
-      udata->x_timing = true;
+      udata->x_timing = stoi((*argv)[arg_idx++]);
     }
     // Output settings
     else if (arg == "--output")
@@ -3076,7 +3081,7 @@ static void InputHelp()
   cout << "  --x_coarse_ord          : order of coarse grid theta method" << endl;
   cout << "  --x_ustop               : use stored solution values from previous iters for implicit stage prediction" << endl;
   cout << "  --x_hermite             : use cubic Hermite spline interpolation for this prediction (default: linear interpolation)" << endl;
-  cout << "  --x_timing              : print timing data for XBraid cycle" << endl;
+  cout << "  --x_timing              : timing level for XBraid cycle (0 whole cycle, 1 iteration, 2 detailed timing file)" << endl;
   cout << "  --output <level>        : output level" << endl;
   cout << "  --nout <nout>           : number of outputs" << endl;
   cout << "  --timing                : print timing data" << endl;
